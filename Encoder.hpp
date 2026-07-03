@@ -17,9 +17,6 @@ public:
         pinMode(encoder2_pin, INPUT_PULLUP);
 
         // TODO: attach the interrupt on pin one such that it calls the readEncoderISR function on a rising edge
-        // ===== START OF ADDED TODO CODE =====
-        attachInterrupt(digitalPinToInterrupt(encoder1_pin), readEncoderISR, RISING);
-        // ===== END OF ADDED TODO CODE =====
 
     }
 
@@ -31,15 +28,6 @@ public:
         // NOTE: DO NOT PLACE SERIAL PRINT STATEMENTS IN THIS FUNCTION
         // NOTE: DO NOT CALL THIS FUNCTION MANUALLY IT WILL ONLY WORK IF CALLED BY THE INTERRUPT
         // TODO: Increase or Decrease the count by one based on the reading on encoder pin 2
-        // ===== START OF ADDED TODO CODE =====
-        if (digitalRead(encoder2_pin) == HIGH) {
-            count++;
-            direction = 1;
-        } else {
-            count--;
-            direction = -1;
-        }
-        // ===== END OF ADDED TODO CODE =====
 
         interrupts();
     }
@@ -48,16 +36,8 @@ public:
     float getRotation() {
 
         // TODO: Convert encoder count to radians
-        // ===== START OF ADDED TODO CODE =====
-        if (counts_per_revolution == 0) {
-            return 0;
-        }
 
-        position = static_cast<float>(count) * 2.0f * PI /
-                   static_cast<float>(counts_per_revolution);
-        // ===== END OF ADDED TODO CODE =====
-
-        return position;
+        return 0;
     }
 
 private:
