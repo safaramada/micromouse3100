@@ -4,17 +4,17 @@ Arduino Nano starter code for the MTRN3100 micromouse project. The current code 
 
 ## Project Files
 
-- `main.ino`: Arduino entry point. Selects which task to run and creates the motors, encoders, lidar, IMU, and robot object.
-- `Robot.hpp`: High-level robot behaviour for Task 3. Combines sensors, motors, and PID controllers into movement modes.
-- `Motor.hpp`: Low-level motor PWM and direction control.
-- `Encoder.hpp`: Encoder counting and wheel rotation measurement.
-- `PIDController.hpp`: PID control helper.
-- `Lidar.hpp`: Front distance sensor interface.
-- `IMU.hpp`: Heading/yaw sensor interface.
+- `src/main.cpp`: Arduino entry point. Selects which task to run and creates the motors, encoders, lidar, IMU, and robot object.
+- `include/Robot.hpp`: High-level robot behaviour for Task 3. Combines sensors, motors, and PID controllers into movement modes.
+- `include/Motor.hpp`: Low-level motor PWM and direction control.
+- `include/Encoder.hpp`: Encoder counting and wheel rotation measurement.
+- `include/PIDController.hpp`: PID control helper.
+- `include/Lidar.hpp`: Front distance sensor interface.
+- `include/IMU.hpp`: Heading/yaw sensor interface.
 
 ## Selecting A Task
 
-In `main.ino`, change `ACTIVE_TASK`:
+In `src/main.cpp`, change `ACTIVE_TASK`:
 
 ```cpp
 #define ACTIVE_TASK RUN_STRAIGHT_LINE
@@ -32,14 +32,14 @@ Available modes:
 
 The current files are starter code. Before the robot can run properly, fill in:
 
-- motor pin setup and PWM output in `Motor.hpp`
-- encoder interrupts, counting, and rotation conversion in `Encoder.hpp`
-- PID maths in `PIDController.hpp`
-- real lidar library calls in `Lidar.hpp`
-- real IMU library calls and gyro calibration in `IMU.hpp`
-- command-string state machine in `Robot.hpp`
+- motor pin setup and PWM output in `include/Motor.hpp`
+- encoder interrupts, counting, and rotation conversion in `include/Encoder.hpp`
+- PID maths in `include/PIDController.hpp`
+- real lidar library calls in `include/Lidar.hpp`
+- real IMU library calls and gyro calibration in `include/IMU.hpp`
+- command-string state machine in `include/Robot.hpp`
 
-Also update the motor and encoder pin numbers in `main.ino` to match your robot wiring.
+Also update the motor and encoder pin numbers in `src/main.cpp` to match your robot wiring.
 
 ## Task 3 Notes
 

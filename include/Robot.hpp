@@ -29,6 +29,8 @@ public:
           Encoder& left_encoder,
           Encoder& right_encoder,
           Lidar& front_lidar,
+          Lidar& left_lidar,
+          Lidar& right_lidar,
           IMU& imu,
           float wheel_radius_mm = 16.0,
           float wheel_base_mm = 80.0)
@@ -37,6 +39,8 @@ public:
           left_encoder(left_encoder),
           right_encoder(right_encoder),
           front_lidar(front_lidar),
+          left_lidar(left_lidar),
+          right_lidar(right_lidar),
           imu(imu),
           wheel_radius_mm(wheel_radius_mm),
           wheel_base_mm(wheel_base_mm),
@@ -202,6 +206,8 @@ private:
     Encoder& left_encoder;
     Encoder& right_encoder;
     Lidar& front_lidar;
+    Lidar& left_lidar;
+    Lidar& right_lidar;
     IMU& imu;
 
     const float wheel_radius_mm;

@@ -1,3 +1,5 @@
+#include <Arduino.h>
+
 #include "Encoder.hpp"
 #include "IMU.hpp"
 #include "Lidar.hpp"
