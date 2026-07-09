@@ -29,8 +29,8 @@ public:
           Encoder& left_encoder,
           Encoder& right_encoder,
           Lidar& front_lidar,
-          Lidar& left_lidar,
-          Lidar& right_lidar,
+        //   Lidar& left_lidar,
+        //   Lidar& right_lidar,
           IMU& imu,
           float wheel_radius_mm = 16.0,
           float wheel_base_mm = 80.0)
@@ -39,8 +39,8 @@ public:
           left_encoder(left_encoder),
           right_encoder(right_encoder),
           front_lidar(front_lidar),
-          left_lidar(left_lidar),
-          right_lidar(right_lidar),
+        //   left_lidar(left_lidar),
+        //   right_lidar(right_lidar),
           imu(imu),
           wheel_radius_mm(wheel_radius_mm),
           wheel_base_mm(wheel_base_mm),
@@ -141,8 +141,19 @@ private:
         setDrivePWM(base_pwm - correction, base_pwm + correction);
     }
 
+
+    // Task 3.2: Wall Distance Control
     void updateWallDistance() {
         uint16_t distance_mm = front_lidar.readDistance();
+
+        // safety exit if the lidar is not ready or the reading is invalid
+        if (!front_lidar.isReady() || distance_mm == 0 || front_lidar.timedOut()) {
+            stopMotors();
+            return;
+        }
+
+
+
         float error_mm = static_cast<float>(distance_mm) - target_wall_distance_mm;
 
         if (fabs(error_mm) <= wall_tolerance_mm) {
@@ -150,9 +161,14 @@ private:
             return;
         }
 
+
+        // might need to change after testing
         float pwm = distance_pid.compute(-error_mm);
         setDrivePWM(pwm, pwm);
     }
+
+
+
 
     void updateTurn() {
         float yaw_error = IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
@@ -206,8 +222,8 @@ private:
     Encoder& left_encoder;
     Encoder& right_encoder;
     Lidar& front_lidar;
-    Lidar& left_lidar;
-    Lidar& right_lidar;
+    // Lidar& left_lidar;
+    // Lidar& right_lidar;
     IMU& imu;
 
     const float wheel_radius_mm;

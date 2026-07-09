@@ -1,44 +1,130 @@
 #pragma once
 
+// AI-assisted implementation: VL53L0X lidar wrapper for returning distance
+// readings in millimetres.
+
 #include <Arduino.h>
+#include <VL53L0X.h>
 #include <Wire.h>
 
 namespace mtrn3100 {
 
-
-// The lidar class is a simple interface designed to assist in distance sensing.
-// This starter implementation assumes an I2C time-of-flight style lidar sensor.
-// You may choose to impliment additional functionality in the future such as
-// multi-sensor support, filtering, or wall detection.
 class Lidar {
 public:
-    Lidar(uint8_t address = 0x29) : address(address) {}
 
-    // This function should be called once in setup before reading distance.
+    // Default address for I2C
+    static constexpr uint8_t DEFAULT_ADDRESS = 0x29;
+    static constexpr uint8_t NO_XSHUT_PIN = 255;
+
+
+    // Constructor for Lidar class
+    Lidar(uint8_t address = DEFAULT_ADDRESS, uint8_t xshut_pin = NO_XSHUT_PIN)
+        : address(address), xshut_pin(xshut_pin) {}
+
+    
+    
+    // Call this once in setup before reading distance.
     void begin() {
+
+        // Initialize I2C communication
         Wire.begin();
 
-        // TODO: Initialise the lidar sensor or external library here.
-        // TODO: Configure timing budget, distance mode, or measurement mode if required.
+        // Check which pin is using rn
+        if (xshut_pin != NO_XSHUT_PIN) {
+            pinMode(xshut_pin, OUTPUT);
+            digitalWrite(xshut_pin, HIGH);
+            delay(10);
+        }
+
+        // Set the timeout for the sensor
+        sensor.setTimeout(timeout_ms);
+        ready = sensor.init();
+
+        if (!ready) {
+            distance = 0;
+            return;
+        }
+
+        // Set the I2C address if it's not the default
+        if (address != DEFAULT_ADDRESS) {
+            sensor.setAddress(address);
+        }
+
+        // Start continuous measurement with a specified period
+        sensor.startContinuous(measurement_period_ms);
     }
 
-    // This function returns the measured distance from the lidar sensor.
-    // NOTE: Choose and document your distance units. Millimetres are common for lidar sensors.
+    // Returns the measured distance in millimetres.
     uint16_t readDistance() {
+        if (!ready) {
+            return distance;
+        }
 
-        // TODO: Read the sensor using I2C or the lidar library.
-        // TODO: Convert the measurement into the chosen units.
-        // TODO: Store the latest valid measurement in distance.
+        uint16_t reading = sensor.readRangeContinuousMillimeters();
+        timed_out = sensor.timeoutOccurred();
+
+        if (!timed_out && reading > 0 && reading < max_valid_distance_mm) {
+            distance = reading;
+        }
 
         return distance;
     }
 
+    /* Dont need it now */
+    // void shutdown() {
+    //     if (xshut_pin == NO_XSHUT_PIN) {
+    //         return;
+    //     }
+
+    //     pinMode(xshut_pin, OUTPUT);
+    //     digitalWrite(xshut_pin, LOW);
+    //     ready = false;
+    //     delay(10);
+    // }
+
+    // void wake() {
+    //     if (xshut_pin == NO_XSHUT_PIN) {
+    //         return;
+    //     }
+
+    //     pinMode(xshut_pin, OUTPUT);
+    //     digitalWrite(xshut_pin, HIGH);
+    //     delay(10);
+    // }
+
+
+    bool isReady() {
+        return ready;
+    }
+
+    // For debug
+    bool timedOut() {
+        return timed_out;
+    }
+
+    // For debug
     uint16_t getDistance() {
         return distance;
     }
 
+
+    // void setMaxValidDistance(uint16_t distance_mm) {
+    //     max_valid_distance_mm = distance_mm;
+    // }
+
+
+
 public:
     const uint8_t address;
+    const uint8_t xshut_pin;
+
+private:
+    VL53L0X sensor;
+    bool ready = false;
+    bool timed_out = false;
+    uint16_t max_valid_distance_mm = 2000;
+    uint16_t timeout_ms = 100;
+    uint16_t measurement_period_ms = 50;
     uint16_t distance = 0;
 };
 

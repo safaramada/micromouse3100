@@ -12,7 +12,8 @@
 #define RUN_TURN 3
 #define RUN_COMMAND_STRING 4
 
-#define ACTIVE_TASK RUN_IDLE
+// ToDO: Change this to run the task you want to test.
+#define ACTIVE_TASK RUN_WALL_DISTANCE
 
 #define LEFT_MOTOR_PWM 9 // PIN 9 is a PWM pin
 #define LEFT_MOTOR_DIR 10
@@ -36,12 +37,13 @@ mtrn3100::Encoder right_encoder(RIGHT_EN_A, RIGHT_EN_B);
 
 
 mtrn3100::Lidar front_lidar;
-mtrn3100::Lidar left_lidar;
-mtrn3100::Lidar right_lidar;
+// mtrn3100::Lidar left_lidar;
+// mtrn3100::Lidar right_lidar;
 mtrn3100::IMU imu;
 
 
-mtrn3100::Robot robot(left_motor, right_motor, left_encoder, right_encoder, front_lidar, left_lidar, right_lidar, imu);
+// mtrn3100::Robot robot(left_motor, right_motor, left_encoder, right_encoder, front_lidar, left_lidar, right_lidar, imu);
+mtrn3100::Robot robot(left_motor, right_motor, left_encoder, right_encoder, front_lidar, imu);
 
 const char command_string[] = "lfrfflfr";
 
