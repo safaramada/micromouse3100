@@ -46,6 +46,7 @@ Robot robot(
 
 StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
+
 const char command_string[] = "lfrfflfr";
 
 void setup() {
@@ -56,14 +57,12 @@ void setup() {
 
     delay(1000);
 
-    // AI-assisted optional setup: uncomment to enable side-LIDAR centring.
-    // robot.enableLidarCentering(true, 45.0);
+    // Use the side LiDARs to help keep the robot centred
+    robot.enableLidarCentering(true);
 
-    // straightLineTask.begin(); // straight line task
-    // robot.startWallDistance(100); // stoping task
-    // turningTask.begin();
+    // Stop if the front wall is closer than 40 mm
+    robot.enableFrontLidarSafety(true, 40);
 
-    
     robot.startCommandString(command_string);
 
 }
