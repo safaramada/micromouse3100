@@ -103,12 +103,6 @@ public:
     }
 
 
-    // void setMaxValidDistance(uint16_t distance_mm) {
-    //     max_valid_distance_mm = distance_mm;
-    // }
-
-
-
 public:
     const uint8_t address;
     const uint8_t xshut_pin;
