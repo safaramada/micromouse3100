@@ -4,63 +4,90 @@
 
 namespace mtrn3100 {
 
-
-// The encoder class is a simple interface which counts and stores an encoders count.
-// Encoder pin 1 is attached to the interupt on the arduino and used to trigger the count.
-// Encoder pin 2 is attached to any digital pin and used to derrive rotation direction.
-// The count is stored as a volatile variable due to the high frequency updates. 
 class Encoder {
 public:
-    Encoder(uint8_t enc1, uint8_t enc2) : encoder1_pin(enc1), encoder2_pin(enc2) {
-        instance = this;  // Store the instance pointer
+    Encoder(uint8_t enc1, uint8_t enc2, uint16_t counts_per_rev = 700, bool invert = false)
+        : encoder1_pin(enc1),
+          encoder2_pin(enc2),
+          counts_per_revolution(counts_per_rev),
+          invert(invert) {}
+
+    void begin() {
         pinMode(encoder1_pin, INPUT_PULLUP);
         pinMode(encoder2_pin, INPUT_PULLUP);
 
-        // TODO: attach the interrupt on pin one such that it calls the readEncoderISR function on a rising edge
-
+        if (instance_count == 0) {
+            instances[0] = this;
+            attachInterrupt(digitalPinToInterrupt(encoder1_pin), readEncoderISR0, RISING);
+            instance_count++;
+        } else if (instance_count == 1) {
+            instances[1] = this;
+            attachInterrupt(digitalPinToInterrupt(encoder1_pin), readEncoderISR1, RISING);
+            instance_count++;
+        }
     }
 
-
-    // Encoder function used to update the encoder
     void readEncoder() {
+        int step = digitalRead(encoder2_pin) ? 1 : -1;
+
+        if (invert) {
+            step = -step;
+        }
+
+        count += step;
+    }
+
+    void reset() {
         noInterrupts();
-
-        // NOTE: DO NOT PLACE SERIAL PRINT STATEMENTS IN THIS FUNCTION
-        // NOTE: DO NOT CALL THIS FUNCTION MANUALLY IT WILL ONLY WORK IF CALLED BY THE INTERRUPT
-        // TODO: Increase or Decrease the count by one based on the reading on encoder pin 2
-
+        count = 0;
         interrupts();
     }
 
-    // Helper function which to convert encouder count to radians
+    long getCount() {
+        noInterrupts();
+        long temp = count;
+        interrupts();
+        return temp;
+    }
+
     float getRotation() {
+        long temp = getCount();
 
-        // TODO: Convert encoder count to radians
+        if (counts_per_revolution == 0) {
+            return 0;
+        }
 
-        return 0;
+        return (2.0 * PI * temp) / counts_per_revolution;
     }
 
 private:
-    static void readEncoderISR() {
-        if (instance != nullptr) {
-            instance->readEncoder();
+    static void readEncoderISR0() {
+        if (instances[0] != nullptr) {
+            instances[0]->readEncoder();
+        }
+    }
+
+    static void readEncoderISR1() {
+        if (instances[1] != nullptr) {
+            instances[1]->readEncoder();
         }
     }
 
 public:
     const uint8_t encoder1_pin;
     const uint8_t encoder2_pin;
-    volatile int8_t direction;
-    float position = 0;
-    uint16_t counts_per_revolution = 0; //TODO: Identify how many encoder counts are in one rotation
+
+    uint16_t counts_per_revolution;
     volatile long count = 0;
-    uint32_t prev_time;
-    bool read = false;
 
 private:
-    static Encoder* instance;
+    bool invert = false;
+
+    static Encoder* instances[2];
+    static uint8_t instance_count;
 };
 
-Encoder* Encoder::instance = nullptr;
+Encoder* Encoder::instances[2] = {nullptr, nullptr};
+uint8_t Encoder::instance_count = 0;
 
-}  // namespace mtrn3100
+}
