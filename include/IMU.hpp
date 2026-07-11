@@ -5,29 +5,37 @@
 
 namespace mtrn3100 {
 
-
-// The IMU class is a simple interface designed to assist in heading control.
-// This starter implementation assumes an I2C IMU with a z-axis gyroscope.
 class IMU {
 public:
     IMU(uint8_t address = 0x68) : address(address) {}
 
-    // This function should be called once in setup before reading the IMU.
     void begin() {
         Wire.begin();
-        prev_time = micros();
 
-        // TODO: Initialise the IMU sensor or external library here.
-        // TODO: Calibrate the gyro offset while the robot is stationary.
+        // Wake up MPU6050
+        writeRegister(0x6B, 0x00);
+        delay(100);
+
+        // Gyro range: +/- 250 deg/s
+        writeRegister(0x1B, 0x00);
+        delay(100);
+
+        calibrateGyro();
+
+        yaw_deg = 0;
+        yaw_zero_deg = 0;
+        prev_time = micros();
     }
 
-    // This function should be called regularly in loop.
     void update() {
         curr_time = micros();
         dt = static_cast<float>(curr_time - prev_time) / 1e6;
         prev_time = curr_time;
 
-        // TODO: Read the z-axis gyro rate from the IMU in degrees per second.
+        if (dt <= 0) {
+            dt = 0.001;
+        }
+
         gyro_z_dps = readGyroZ();
 
         yaw_deg += (gyro_z_dps - gyro_z_offset_dps) * dt;
@@ -59,20 +67,66 @@ public:
     }
 
 private:
+    void calibrateGyro() {
+        long sum = 0;
+        const int samples = 500;
+
+        Serial.println("Calibrating IMU. Keep robot still.");
+
+        for (int i = 0; i < samples; i++) {
+            sum += readRawGyroZ();
+            delay(2);
+        }
+
+        float raw_offset = static_cast<float>(sum) / samples;
+        gyro_z_offset_dps = raw_offset / 131.0;
+
+        Serial.print("Gyro Z offset: ");
+        Serial.println(gyro_z_offset_dps);
+    }
+
     float readGyroZ() {
-        // TODO: Replace this with the IMU library call for gyro z rate.
-        return 0;
+        int16_t raw = readRawGyroZ();
+
+        // MPU6050 +/-250 dps sensitivity = 131 LSB per deg/s
+        return static_cast<float>(raw) / 131.0;
+    }
+
+    int16_t readRawGyroZ() {
+        Wire.beginTransmission(address);
+        Wire.write(0x47); // GYRO_ZOUT_H
+        Wire.endTransmission(false);
+
+        Wire.requestFrom(address, static_cast<uint8_t>(2));
+
+        if (Wire.available() < 2) {
+            return 0;
+        }
+
+        int16_t high = Wire.read();
+        int16_t low = Wire.read();
+
+        return (high << 8) | low;
+    }
+
+    void writeRegister(uint8_t reg, uint8_t value) {
+        Wire.beginTransmission(address);
+        Wire.write(reg);
+        Wire.write(value);
+        Wire.endTransmission();
     }
 
 public:
     const uint8_t address;
+
     float yaw_deg = 0;
     float yaw_zero_deg = 0;
     float gyro_z_dps = 0;
     float gyro_z_offset_dps = 0;
     float dt = 0;
+
     uint32_t prev_time = 0;
     uint32_t curr_time = 0;
 };
 
-}  // namespace mtrn3100
+}
