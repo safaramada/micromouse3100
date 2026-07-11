@@ -4,7 +4,7 @@
 // readings in millimetres.
 
 #include <Arduino.h>
-#include <VL53L0X.h>
+#include <VL6180X.h>
 #include <Wire.h>
 
 namespace mtrn3100 {
@@ -38,20 +38,15 @@ public:
 
         // Set the timeout for the sensor
         sensor.setTimeout(timeout_ms);
-        ready = sensor.init();
-
-        if (!ready) {
-            distance = 0;
-            return;
-        }
+        sensor.init();
+        sensor.configureDefault();
 
         // Set the I2C address if it's not the default
         if (address != DEFAULT_ADDRESS) {
             sensor.setAddress(address);
         }
 
-        // Start continuous measurement with a specified period
-        sensor.startContinuous(measurement_period_ms);
+        ready = true;
     }
 
     // Returns the measured distance in millimetres.
@@ -60,7 +55,7 @@ public:
             return distance;
         }
 
-        uint16_t reading = sensor.readRangeContinuousMillimeters();
+        uint16_t reading = sensor.readRangeSingleMillimeters();
         timed_out = sensor.timeoutOccurred();
 
         if (!timed_out && reading > 0 && reading < max_valid_distance_mm) {
@@ -119,12 +114,11 @@ public:
     const uint8_t xshut_pin;
 
 private:
-    VL53L0X sensor;
+    VL6180X sensor;
     bool ready = false;
     bool timed_out = false;
     uint16_t max_valid_distance_mm = 2000;
     uint16_t timeout_ms = 100;
-    uint16_t measurement_period_ms = 50;
     uint16_t distance = 0;
 };
 

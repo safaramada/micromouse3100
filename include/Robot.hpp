@@ -145,6 +145,9 @@ private:
     // Task 3.2: Wall Distance Control
     void updateWallDistance() {
         uint16_t distance_mm = front_lidar.readDistance();
+        Serial.print("Distance: ");
+        Serial.print(distance_mm);
+        Serial.println(" mm");
 
         // safety exit if the lidar is not ready or the reading is invalid
         if (!front_lidar.isReady() || distance_mm == 0 || front_lidar.timedOut()) {
