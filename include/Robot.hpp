@@ -134,6 +134,14 @@ public:
         stopMotors();
     }
 
+    // AI-assisted implementation: enable side-LIDAR centring for forward commands.
+    // Set target_side_distance_mm to the reading measured when the mouse is centred
+    // beside one wall.
+    void enableLidarCentering(bool enabled, float target_side_distance_mm = 45.0) {
+        lidar_centering_enabled = enabled;
+        side_wall_target_mm = target_side_distance_mm;
+    }
+
     void startTurnHold(float angle_deg) {
         task = TASK_TURN;
         finished = false;
@@ -380,15 +388,53 @@ private:
             return;
         }
 
-        float heading_error =
-            IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
+        float heading_error = IMU::wrapAngleDeg(imu.getYawDeg() - target_yaw_deg);
+        float imu_correction = 4.0 * heading_error;
+        float lidar_correction = getLidarCenteringCorrection();
+        float correction = imu_correction + lidar_correction;
 
-        float correction = heading_pid.compute(-heading_error);
+        correction = constrain(correction, -50, 50);
 
-        setDrivePWM(
-            base_pwm - correction,
-            base_pwm + correction
-        );
+        float left_pwm = constrain(base_pwm + correction, 80, 180);
+        float right_pwm = constrain(base_pwm - correction, 80, 180);
+
+        setDrivePWM(left_pwm, right_pwm);
+    }
+
+    // AI-assisted implementation: calculate steering from the side LIDARs.
+    // Positive correction steers right; negative correction steers left.
+    float getLidarCenteringCorrection() {
+        if (!lidar_centering_enabled) {
+            return 0;
+        }
+
+        uint16_t left_distance_mm = left_lidar.readDistance();
+        bool left_wall = isValidSideWall(left_lidar, left_distance_mm);
+
+        uint16_t right_distance_mm = right_lidar.readDistance();
+        bool right_wall = isValidSideWall(right_lidar, right_distance_mm);
+
+        float wall_error_mm = 0;
+
+        if (left_wall && right_wall) {
+            wall_error_mm = static_cast<float>(right_distance_mm) - left_distance_mm;
+        } else if (left_wall) {
+            wall_error_mm = side_wall_target_mm - left_distance_mm;
+        } else if (right_wall) {
+            wall_error_mm = static_cast<float>(right_distance_mm) - side_wall_target_mm;
+        } else {
+            return 0;
+        }
+
+        float correction = lidar_centering_kp * wall_error_mm;
+        return constrain(correction, -max_lidar_correction, max_lidar_correction);
+    }
+
+    bool isValidSideWall(Lidar& lidar, uint16_t distance_mm) {
+        return lidar.isReady() &&
+               !lidar.timedOut() &&
+               distance_mm >= min_side_wall_mm &&
+               distance_mm <= max_side_wall_mm;
     }
 
     void updateTurnCommand() {
@@ -400,9 +446,21 @@ private:
             return;
         }
 
-        float pwm = turn_pid.compute(-yaw_error);
+        // AI-assisted change: match the proven Task 3 turning controller.
+        float Kp_turn = 2.5;
+        float pwm = Kp_turn * yaw_error;
 
-        setDrivePWM(pwm, -pwm);
+        pwm = constrain(pwm, -120, 120);
+
+        if (fabs(pwm) < 65) {
+            if (pwm > 0) {
+                pwm = 65;
+            } else {
+                pwm = -65;
+            }
+        }
+
+        setDrivePWM(-pwm, pwm);
     }
 
     void completeCurrentCommand() {
@@ -465,7 +523,14 @@ private:
     float start_left_rotation = 0;
     float start_right_rotation = 0;
     float wall_tolerance_mm = 5;
-    float turn_tolerance_deg = 5;
+    float turn_tolerance_deg = 2;
+
+    bool lidar_centering_enabled = false;
+    float side_wall_target_mm = 45.0;
+    const float lidar_centering_kp = 0.8;
+    const float max_lidar_correction = 30.0;
+    const uint16_t min_side_wall_mm = 10;
+    const uint16_t max_side_wall_mm = 140;
 
     const char* command_string = nullptr;
     uint8_t command_index = 0;
