@@ -20,9 +20,9 @@ Encoder leftEncoder(2, 4, 700, false);
 Encoder rightEncoder(3, 5, 700, false);
 
 
-#define FRONT_XSHUT A0
-#define LEFT_XSHUT  A1
-#define RIGHT_XSHUT A2
+#define FRONT_XSHUT A2
+#define LEFT_XSHUT  A0
+#define RIGHT_XSHUT A1
 
 // Lidar is not used for straight-line, but Robot requires these objects
 mtrn3100::Lidar front_lidar(0x30, FRONT_XSHUT);
