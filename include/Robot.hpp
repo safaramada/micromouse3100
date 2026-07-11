@@ -128,6 +128,19 @@ public:
         // Forward should drive one maze cell. Left/right should turn 90 degrees.
     }
 
+    void startTurnHold(float angle_deg) {
+        task = TASK_TURN;
+        finished = false;
+
+        target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
+
+        turn_pid.zeroAndSetTarget(0, 0);
+
+        Serial.print("Turn hold target yaw: ");
+        Serial.println(target_yaw_deg);
+    }
+
+
     void update() {
         imu.update();
 
@@ -247,15 +260,46 @@ private:
     }
 
     void updateTurn() {
-        float yaw_error = IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
+        float current_yaw = imu.getYawDeg();
 
+        float yaw_error = IMU::wrapAngleDeg(target_yaw_deg - current_yaw);
+
+        Serial.print("Yaw: ");
+        Serial.print(current_yaw);
+        Serial.print(" Target: ");
+        Serial.print(target_yaw_deg);
+        Serial.print(" Error: ");
+        Serial.println(yaw_error);
+
+        // If close enough, stop motors but KEEP holding this target
         if (fabs(yaw_error) <= turn_tolerance_deg) {
             stopMotors();
+            finished = true;
             return;
         }
 
-        float pwm = turn_pid.compute(-yaw_error);
-        setDrivePWM(pwm, -pwm);
+        finished = false;
+
+        float Kp_turn = 2.5;
+        float pwm = Kp_turn * yaw_error;
+
+        pwm = constrain(pwm, -120, 120);
+
+        // Minimum PWM so the robot can actually overcome friction
+        if (fabs(pwm) < 65) {
+            if (pwm > 0) {
+                pwm = 65;
+            } else {
+                pwm = -65;
+            }
+        }
+
+        /*
+        This sign may need flipping depending on your motor wiring.
+        If the robot turns away from the target instead of toward it,
+        change this line to setDrivePWM(pwm, -pwm);
+        */
+        setDrivePWM(-pwm, pwm);
     }
 
     void updateCommandString() {
