@@ -11,7 +11,7 @@ public:
 
     void begin() {
         // Slightly more than 1m so it clearly passes the finish line
-        robot.startStraightLine(1050.0, 140);
+        robot.startStraightLine(3000.0, 140);
     }
 
     void update() {

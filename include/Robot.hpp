@@ -49,21 +49,31 @@ public:
           turn_pid(4.0, 0.0, 0.0) {}
 
     void begin() {
+        left_encoder.begin();
+        right_encoder.begin();
+
         front_lidar.begin();
+
         imu.begin();
         imu.zeroYaw();
+
         stop();
     }
 
-    void startStraightLine(float distance_mm, int16_t pwm = 120) {
+    void startStraightLine(float distance_mm, int16_t pwm = 140) {
         task = TASK_STRAIGHT_LINE;
         finished = false;
+
         target_distance_mm = distance_mm;
-        base_pwm = pwm;
+        base_pwm = abs(pwm);
+
         start_left_rotation = left_encoder.getRotation();
         start_right_rotation = right_encoder.getRotation();
+
         target_yaw_deg = imu.getYawDeg();
-        heading_pid.zeroAndSetTarget(0, 0);
+
+        Serial.print("Straight line target yaw: ");
+        Serial.println(target_yaw_deg);
     }
 
     void startWallDistance(float front_distance_mm) {
@@ -136,22 +146,76 @@ private:
             return;
         }
 
-        float heading_error = IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
-        float correction = heading_pid.compute(-heading_error);
-        setDrivePWM(base_pwm - correction, base_pwm + correction);
+        float current_yaw = imu.getYawDeg();
+
+        // Positive if robot has rotated away from starting heading
+        float heading_error = IMU::wrapAngleDeg(current_yaw - target_yaw_deg);
+
+        float Kp_heading = 4.0;
+        float correction = Kp_heading * heading_error;
+
+        correction = constrain(correction, -50, 50);
+
+        float left_pwm = base_pwm + correction;
+        float right_pwm = base_pwm - correction;
+
+        left_pwm = constrain(left_pwm, 80, 180);
+        right_pwm = constrain(right_pwm, 80, 180);
+
+        setDrivePWM(left_pwm, right_pwm);
+
+        Serial.print("Yaw: ");
+        Serial.print(current_yaw);
+        Serial.print(" Error: ");
+        Serial.print(heading_error);
+        Serial.print(" Distance: ");
+        Serial.print(distance_mm);
+        Serial.print(" L_PWM: ");
+        Serial.print(left_pwm);
+        Serial.print(" R_PWM: ");
+        Serial.println(right_pwm);
     }
 
     void updateWallDistance() {
         uint16_t distance_mm = front_lidar.readDistance();
+
+        Serial.print("Front lidar distance: ");
+        Serial.print(distance_mm);
+        Serial.println(" mm");
+
+        if (!front_lidar.isReady() || front_lidar.timedOut() || distance_mm == 0) {
+            stopMotors();
+            Serial.println("Invalid lidar reading. Stopping.");
+            return;
+        }
+
         float error_mm = static_cast<float>(distance_mm) - target_wall_distance_mm;
 
         if (fabs(error_mm) <= wall_tolerance_mm) {
             stopMotors();
+            Serial.println("At target wall distance.");
             return;
         }
 
-        float pwm = distance_pid.compute(-error_mm);
+        float Kp_wall = 1.5;
+        float pwm = Kp_wall * error_mm;
+
+        pwm = constrain(pwm, -120, 120);
+
+        if (fabs(pwm) < 65) {
+            if (pwm > 0) {
+                pwm = 65;
+            } else {
+                pwm = -65;
+            }
+        }
+
         setDrivePWM(pwm, pwm);
+
+        Serial.print("Wall error: ");
+        Serial.print(error_mm);
+        Serial.print(" PWM: ");
+        Serial.println(pwm);
     }
 
     void updateTurn() {
@@ -180,13 +244,16 @@ private:
     float getAverageDistanceMM() {
         float left_rotation = left_encoder.getRotation() - start_left_rotation;
         float right_rotation = right_encoder.getRotation() - start_right_rotation;
-        float average_rotation = (left_rotation + right_rotation) / 2.0;
+
+        float average_rotation = (fabs(left_rotation) + fabs(right_rotation)) / 2.0;
 
         return average_rotation * wheel_radius_mm;
     }
 
     void setDrivePWM(float left_pwm, float right_pwm) {
-        left_motor.setPWM(static_cast<int16_t>(constrain(left_pwm, -255, 255)));
+        left_motor.setPWM(static_cast<int16_t>(constrain(-left_pwm, -255, 255)));
+
+        // Right motor is inverted because negative PWM was forward for your robot
         right_motor.setPWM(static_cast<int16_t>(constrain(right_pwm, -255, 255)));
     }
 
