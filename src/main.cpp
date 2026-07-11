@@ -47,7 +47,9 @@ void setup() {
 
     delay(1000);
 
-    straightLineTask.begin();
+    // straightLineTask.begin();
+        robot.startWallDistance(100);
+
 }
 
 void loop() {

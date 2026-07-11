@@ -52,6 +52,8 @@ public:
         left_encoder.begin();
         right_encoder.begin();
 
+        front_lidar.begin();
+
         imu.begin();
         imu.zeroYaw();
 
@@ -176,15 +178,44 @@ private:
 
     void updateWallDistance() {
         uint16_t distance_mm = front_lidar.readDistance();
+
+        Serial.print("Front lidar distance: ");
+        Serial.print(distance_mm);
+        Serial.println(" mm");
+
+        if (!front_lidar.isReady() || front_lidar.timedOut() || distance_mm == 0) {
+            stopMotors();
+            Serial.println("Invalid lidar reading. Stopping.");
+            return;
+        }
+
         float error_mm = static_cast<float>(distance_mm) - target_wall_distance_mm;
 
         if (fabs(error_mm) <= wall_tolerance_mm) {
             stopMotors();
+            Serial.println("At target wall distance.");
             return;
         }
 
-        float pwm = distance_pid.compute(-error_mm);
+        float Kp_wall = 1.5;
+        float pwm = Kp_wall * error_mm;
+
+        pwm = constrain(pwm, -120, 120);
+
+        if (fabs(pwm) < 65) {
+            if (pwm > 0) {
+                pwm = 65;
+            } else {
+                pwm = -65;
+            }
+        }
+
         setDrivePWM(pwm, pwm);
+
+        Serial.print("Wall error: ");
+        Serial.print(error_mm);
+        Serial.print(" PWM: ");
+        Serial.println(pwm);
     }
 
     void updateTurn() {
