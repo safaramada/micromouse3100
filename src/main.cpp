@@ -6,6 +6,8 @@
 #include "Lidar.hpp"
 #include "Robot.hpp"
 #include "StraightLineTracking.hpp"
+#include "Turning.hpp"
+
 
 using namespace mtrn3100;
 
@@ -38,6 +40,7 @@ Robot robot(
 );
 
 StraightLineTracking straightLineTask(robot);
+Turning turningTask(robot);
 
 void setup() {
     Serial.begin(115200);
@@ -47,8 +50,10 @@ void setup() {
 
     delay(1000);
 
-    // straightLineTask.begin();
-        robot.startWallDistance(100);
+    // straightLineTask.begin(); // straight line task
+        // robot.startWallDistance(100); // stoping task
+    
+    turningTask.begin();
 
 }
 
