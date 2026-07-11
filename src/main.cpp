@@ -17,10 +17,15 @@ Motor rightMotor(9, 10);
 Encoder leftEncoder(2, 4, 700, false);
 Encoder rightEncoder(3, 5, 700, false);
 
+
+#define FRONT_XSHUT A0
+#define LEFT_XSHUT  A1
+#define RIGHT_XSHUT A2
+
 // Lidar is not used for straight-line, but Robot requires these objects
-Lidar frontLidar;
-Lidar leftLidar;
-Lidar rightLidar;
+mtrn3100::Lidar front_lidar(0x30, FRONT_XSHUT);
+mtrn3100::Lidar left_lidar(0x31, LEFT_XSHUT);
+mtrn3100::Lidar right_lidar(0x32, RIGHT_XSHUT);
 
 IMU imu;
 
@@ -29,9 +34,9 @@ Robot robot(
     rightMotor,
     leftEncoder,
     rightEncoder,
-    frontLidar,
-    leftLidar,
-    rightLidar,
+    front_lidar,
+    left_lidar,
+    right_lidar,
     imu,
     16.0,  // wheel radius in mm
     80.0   // wheel base in mm
@@ -48,7 +53,7 @@ void setup() {
     delay(1000);
 
     // straightLineTask.begin();
-        robot.startWallDistance(100);
+    robot.startWallDistance(100);
 
 }
 

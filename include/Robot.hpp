@@ -52,13 +52,41 @@ public:
         left_encoder.begin();
         right_encoder.begin();
 
-        front_lidar.begin();
+        beginSensor();
 
         imu.begin();
         imu.zeroYaw();
 
         stop();
     }
+
+    void beginSensor(){
+        pinMode(front_lidar.xshut_pin, OUTPUT);
+        pinMode(left_lidar.xshut_pin, OUTPUT);
+        pinMode(right_lidar.xshut_pin, OUTPUT);
+
+        // Switch all sensors off first
+        digitalWrite(front_lidar.xshut_pin, LOW);
+        digitalWrite(left_lidar.xshut_pin, LOW);
+        digitalWrite(right_lidar.xshut_pin, LOW);
+        delay(20);
+
+        // Start front and assign 0x30
+        digitalWrite(front_lidar.xshut_pin, HIGH);
+        delay(10);
+        front_lidar.begin();
+
+        // Start left and assign 0x31
+        digitalWrite(left_lidar.xshut_pin, HIGH);
+        delay(10);
+        left_lidar.begin();
+
+        // Start right and assign 0x32
+        digitalWrite(right_lidar.xshut_pin, HIGH);
+        delay(10);
+        right_lidar.begin();
+    }
+
 
     void startStraightLine(float distance_mm, int16_t pwm = 140) {
         task = TASK_STRAIGHT_LINE;
