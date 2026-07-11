@@ -12,7 +12,7 @@
 #define RUN_TURN 3
 #define RUN_COMMAND_STRING 4
 
-#define ACTIVE_TASK RUN_IDLE
+#define ACTIVE_TASK RUN_COMMAND_STRING
 
 #define LEFT_MOTOR_PWM 9 // PIN 9 is a PWM pin
 #define LEFT_MOTOR_DIR 10

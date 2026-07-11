@@ -20,6 +20,12 @@ enum RobotTask {
     TASK_COMMAND_STRING
 };
 
+enum CommandState {
+    COMMAND_READY,
+    COMMAND_FORWARD,
+    COMMAND_TURN
+};
+
 // The robot class combines the low-level hardware classes into Task 3 actions.
 // It is intentionally a starter structure so each controller can be tuned in one place.
 class Robot {
@@ -85,9 +91,9 @@ public:
         finished = false;
         command_string = commands;
         command_index = 0;
+        command_state = COMMAND_READY;
 
-        // TODO: Start the first command and advance one command at a time.
-        // Forward should drive one maze cell. Left/right should turn 90 degrees.
+        stopMotors();
     }
 
     void update() {
@@ -167,14 +173,107 @@ private:
     }
 
     void updateCommandString() {
-        if (command_string == nullptr || command_string[command_index] == '\0') {
+        if (command_string == nullptr) {
             finishTask();
             return;
         }
 
-        // TODO: Replace this placeholder with a command state machine.
-        // command_string[command_index] will be 'f', 'l', or 'r'.
-        finishTask();
+        if (command_state == COMMAND_READY) {
+            startNextCommand();
+            return;
+        }
+
+        if (command_state == COMMAND_FORWARD) {
+            updateForwardCommand();
+            return;
+        }
+
+        if (command_state == COMMAND_TURN) {
+            updateTurnCommand();
+        }
+    }
+
+    void startNextCommand() {
+
+        char command = command_string[command_index];
+
+        if (command == '\0') {
+            finishTask();
+            return;
+        }
+
+        if (command == 'f' || command == 'F') {
+            start_left_rotation = left_encoder.getRotation();
+            start_right_rotation = right_encoder.getRotation();
+
+            target_distance_mm = maze_cell_distance_mm;
+            target_yaw_deg = imu.getYawDeg();
+
+            heading_pid.zeroAndSetTarget(0, 0);
+            command_state = COMMAND_FORWARD;
+        }
+
+        else if (command == 'l' || command == 'L') {
+            target_yaw_deg =
+                IMU::wrapAngleDeg(imu.getYawDeg() + 90.0);
+
+            turn_pid.zeroAndSetTarget(0, 0);
+            command_state = COMMAND_TURN;
+        }
+        
+        else if (command == 'r' || command == 'R') {
+            target_yaw_deg =
+                IMU::wrapAngleDeg(imu.getYawDeg() - 90.0);
+
+            turn_pid.zeroAndSetTarget(0, 0);
+            command_state = COMMAND_TURN;
+        }
+        else {
+
+            command_index++;
+
+        }
+
+    }
+
+    void updateForwardCommand() {
+        float distance_mm = getAverageDistanceMM();
+
+        if (distance_mm >= target_distance_mm) {
+            completeCurrentCommand();
+            return;
+        }
+
+        float heading_error =
+            IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
+
+        float correction = heading_pid.compute(-heading_error);
+
+        setDrivePWM(
+            base_pwm - correction,
+            base_pwm + correction
+        );
+    }
+
+    void updateTurnCommand() {
+        float yaw_error =
+            IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
+
+        if (fabs(yaw_error) <= turn_tolerance_deg) {
+            completeCurrentCommand();
+            return;
+        }
+
+        float pwm = turn_pid.compute(-yaw_error);
+
+        setDrivePWM(pwm, -pwm);
+    }
+
+    void completeCurrentCommand() {
+        stopMotors();
+
+        command_index++;
+        command_state = COMMAND_READY;
     }
 
     float getAverageDistanceMM() {
@@ -231,6 +330,9 @@ private:
 
     const char* command_string = nullptr;
     uint8_t command_index = 0;
+    CommandState command_state = COMMAND_READY;
+    const float maze_cell_distance_mm = 180.0;
+
 };
 
 }  // namespace mtrn3100
