@@ -57,8 +57,11 @@ void setup() {
 
     // straightLineTask.begin(); // straight line task
         // robot.startWallDistance(100); // stoping task
+
     
-    turningTask.begin();
+    // turningTask.begin();
+   const char command_string[] = "lfrfflfr";
+   robot.startCommandString(command_string);
 
 }
 
