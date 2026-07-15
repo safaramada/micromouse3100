@@ -63,7 +63,10 @@ void setup() {
     // Stop if the front wall is closer than 40 mm
     robot.enableFrontLidarSafety(true, 40);
 
-    robot.startCommandString(command_string);
+    robot.startStraightLine(1000.0, 140); // Task: Move forward 1000 mm at PWM 140
+    robot.startWallDistance(100.0); // Task: Maintain 100 mm distance from front wall
+    robot.startTurn(90.0); // Task: Turn 90 degrees clockwise    
+    robot.startCommandString(command_string); // Task: Execute the command string "lfrfflfr"
 
 }
 
