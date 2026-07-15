@@ -1,6 +1,6 @@
 #pragma once
 
-// AI-assisted implementation: VL53L0X lidar wrapper for returning distance
+// AI-assisted implementation: VL6180X lidar wrapper for returning distance
 // readings in millimetres.
 
 #include <Arduino.h>

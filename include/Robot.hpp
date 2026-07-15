@@ -20,6 +20,12 @@ enum RobotTask {
     TASK_COMMAND_STRING
 };
 
+enum CommandState {
+    COMMAND_READY,
+    COMMAND_FORWARD,
+    COMMAND_TURN
+};
+
 // The robot class combines the low-level hardware classes into Task 3 actions.
 // It is intentionally a starter structure so each controller can be tuned in one place.
 class Robot {
@@ -52,7 +58,7 @@ public:
         left_encoder.begin();
         right_encoder.begin();
 
-        beginSensor();
+        beginSensors();
 
         imu.begin();
         imu.zeroYaw();
@@ -60,7 +66,7 @@ public:
         stop();
     }
 
-    void beginSensor(){
+    void beginSensors(){
         pinMode(front_lidar.xshut_pin, OUTPUT);
         pinMode(left_lidar.xshut_pin, OUTPUT);
         pinMode(right_lidar.xshut_pin, OUTPUT);
@@ -123,9 +129,19 @@ public:
         finished = false;
         command_string = commands;
         command_index = 0;
+        command_state = COMMAND_READY;
 
-        // TODO: Start the first command and advance one command at a time.
-        // Forward should drive one maze cell. Left/right should turn 90 degrees.
+        stopMotors();
+    }
+
+    void enableLidarCentering(bool enabled, float target_side_distance_mm = 45.0) {
+        lidar_centering_enabled = enabled;
+        side_wall_target_mm = target_side_distance_mm;
+    }
+
+    void enableFrontLidarSafety(bool enabled, uint16_t stop_distance_mm = 40) {
+        front_lidar_safety_enabled = enabled;
+        front_stop_distance_mm = stop_distance_mm;
     }
 
     void startTurnHold(float angle_deg) {
@@ -139,7 +155,6 @@ public:
         Serial.print("Turn hold target yaw: ");
         Serial.println(target_yaw_deg);
     }
-
 
     void update() {
         imu.update();
@@ -303,14 +318,184 @@ private:
     }
 
     void updateCommandString() {
-        if (command_string == nullptr || command_string[command_index] == '\0') {
+        if (command_string == nullptr) {
             finishTask();
             return;
         }
 
-        // TODO: Replace this placeholder with a command state machine.
-        // command_string[command_index] will be 'f', 'l', or 'r'.
-        finishTask();
+        if (command_state == COMMAND_READY) {
+            startNextCommand();
+            return;
+        }
+
+        if (command_state == COMMAND_FORWARD) {
+            updateForwardCommand();
+            return;
+        }
+
+        if (command_state == COMMAND_TURN) {
+            updateTurnCommand();
+        }
+    }
+
+    void startNextCommand() {
+
+        char command = command_string[command_index];
+
+        if (command == '\0') {
+            finishTask();
+            return;
+        }
+
+        if (command == 'f' || command == 'F') {
+            start_left_rotation = left_encoder.getRotation();
+            start_right_rotation = right_encoder.getRotation();
+
+            target_distance_mm = maze_cell_distance_mm;
+            target_yaw_deg = imu.getYawDeg();
+
+            heading_pid.zeroAndSetTarget(0, 0);
+            command_state = COMMAND_FORWARD;
+        }
+
+        else if (command == 'l' || command == 'L') {
+            target_yaw_deg =
+                IMU::wrapAngleDeg(imu.getYawDeg() + 90.0);
+
+            turn_pid.zeroAndSetTarget(0, 0);
+            command_state = COMMAND_TURN;
+        }
+        
+        else if (command == 'r' || command == 'R') {
+            target_yaw_deg =
+                IMU::wrapAngleDeg(imu.getYawDeg() - 90.0);
+
+            turn_pid.zeroAndSetTarget(0, 0);
+            command_state = COMMAND_TURN;
+        }
+        else {
+
+            command_index++;
+
+        }
+
+    }
+
+    void updateForwardCommand() {
+        float distance_mm = getAverageDistanceMM();
+
+        // Front LiDAR collision check
+        if (front_lidar_safety_enabled) {
+            uint16_t front_distance_mm = front_lidar.readDistance();
+
+            bool valid_front_reading =
+                front_lidar.isReady() &&
+                !front_lidar.timedOut() &&
+                front_distance_mm > 0;
+
+            if (valid_front_reading &&
+                front_distance_mm <= front_stop_distance_mm) {
+
+                Serial.print("Emergency stop: front wall at ");
+                Serial.print(front_distance_mm);
+                Serial.println(" mm");
+
+                finishTask();
+                return;
+            }
+        }
+
+        // Stop normally after travelling one maze cell
+        if (distance_mm >= target_distance_mm) {
+            completeCurrentCommand();
+            return;
+        }
+
+        float heading_error =
+            IMU::wrapAngleDeg(imu.getYawDeg() - target_yaw_deg);
+
+        float imu_correction = 4.0 * heading_error;
+        float lidar_correction = getLidarCenteringCorrection();
+
+        float correction =
+            imu_correction + lidar_correction;
+
+        correction = constrain(correction, -50, 50);
+
+        float left_pwm =
+            constrain(base_pwm + correction, 80, 180);
+
+        float right_pwm =
+            constrain(base_pwm - correction, 80, 180);
+
+        setDrivePWM(left_pwm, right_pwm);
+    }
+
+    float getLidarCenteringCorrection() {
+        if (!lidar_centering_enabled) {
+            return 0;
+        }
+
+        uint16_t left_distance_mm = left_lidar.readDistance();
+        bool left_wall = isValidSideWall(left_lidar, left_distance_mm);
+
+        uint16_t right_distance_mm = right_lidar.readDistance();
+        bool right_wall = isValidSideWall(right_lidar, right_distance_mm);
+
+        float wall_error_mm = 0;
+
+        if (left_wall && right_wall) {
+            wall_error_mm = static_cast<float>(right_distance_mm) - left_distance_mm;
+        } else if (left_wall) {
+            wall_error_mm = side_wall_target_mm - left_distance_mm;
+        } else if (right_wall) {
+            wall_error_mm = static_cast<float>(right_distance_mm) - side_wall_target_mm;
+        } else {
+            return 0;
+        }
+
+        float correction = lidar_centering_kp * wall_error_mm;
+        return constrain(correction, -max_lidar_correction, max_lidar_correction);
+    }
+
+    bool isValidSideWall(Lidar& lidar, uint16_t distance_mm) {
+        return lidar.isReady() &&
+               !lidar.timedOut() &&
+               distance_mm >= min_side_wall_mm &&
+               distance_mm <= max_side_wall_mm;
+    }
+
+    void updateTurnCommand() {
+        float yaw_error =
+            IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
+
+        if (fabs(yaw_error) <= turn_tolerance_deg) {
+            completeCurrentCommand();
+            return;
+        }
+
+        // AI-assisted change: match the proven Task 3 turning controller.
+        float Kp_turn = 2.5;
+        float pwm = Kp_turn * yaw_error;
+
+        pwm = constrain(pwm, -120, 120);
+
+        if (fabs(pwm) < 65) {
+            if (pwm > 0) {
+                pwm = 65;
+            } else {
+                pwm = -65;
+            }
+        }
+
+        setDrivePWM(-pwm, pwm);
+    }
+
+    void completeCurrentCommand() {
+        stopMotors();
+
+        command_index++;
+        command_state = COMMAND_READY;
     }
 
     float getAverageDistanceMM() {
@@ -366,10 +551,22 @@ private:
     float start_left_rotation = 0;
     float start_right_rotation = 0;
     float wall_tolerance_mm = 5;
-    float turn_tolerance_deg = 5;
+    float turn_tolerance_deg = 2;
+
+    bool lidar_centering_enabled = false;
+    float side_wall_target_mm = 45.0;
+    const float lidar_centering_kp = 0.8;
+    const float max_lidar_correction = 30.0;
+    const uint16_t min_side_wall_mm = 10;
+    const uint16_t max_side_wall_mm = 140;
+    bool front_lidar_safety_enabled = false;
+    uint16_t front_stop_distance_mm = 40;
 
     const char* command_string = nullptr;
     uint8_t command_index = 0;
+    CommandState command_state = COMMAND_READY;
+    const float maze_cell_distance_mm = 180.0;
+
 };
 
 }  // namespace mtrn3100

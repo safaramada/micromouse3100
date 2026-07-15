@@ -24,7 +24,7 @@ Encoder rightEncoder(3, 5, 700, false);
 #define LEFT_XSHUT  A0
 #define RIGHT_XSHUT A1
 
-// Lidar is not used for straight-line, but Robot requires these objects
+// AI-assisted setup: three LIDARs use separate addresses for active wall sensing.
 mtrn3100::Lidar front_lidar(0x30, FRONT_XSHUT);
 mtrn3100::Lidar left_lidar(0x31, LEFT_XSHUT);
 mtrn3100::Lidar right_lidar(0x32, RIGHT_XSHUT);
@@ -47,6 +47,8 @@ Robot robot(
 StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
 
+const char command_string[] = "lfrfflfr";
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
@@ -55,14 +57,17 @@ void setup() {
 
     delay(1000);
 
-    // straightLineTask.begin(); // straight line task
-        // robot.startWallDistance(100); // stoping task
-    
-    turningTask.begin();
+    // Use the side LiDARs to help keep the robot centred
+    robot.enableLidarCentering(true);
+
+    // Stop if the front wall is closer than 40 mm
+    robot.enableFrontLidarSafety(true, 40);
+
+    robot.startCommandString(command_string);
 
 }
 
 void loop() {
-    straightLineTask.update();
+    robot.update();
     delay(10);
 }
