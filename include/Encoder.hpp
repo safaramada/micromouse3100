@@ -87,7 +87,4 @@ private:
     static uint8_t instance_count;
 };
 
-Encoder* Encoder::instances[2] = {nullptr, nullptr};
-uint8_t Encoder::instance_count = 0;
-
 }

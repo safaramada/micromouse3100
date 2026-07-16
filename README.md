@@ -1,11 +1,16 @@
 # MTRN3100 Micromouse
 
-Arduino Nano starter code for the MTRN3100 micromouse project. The current code is organised around Task 3 simple driving: straight-line tracking, wall-distance stopping, turning, and chained maze commands.
+Arduino Nano starter code for the MTRN3100 micromouse project. The robot behaviours are separated into straight-line tracking, wall-distance stopping, turning, and chained maze commands.
 
 ## Project Files
 
 - `src/main.cpp`: Arduino entry point. Selects which task to run and creates the motors, encoders, lidar, IMU, and robot object.
-- `include/Robot.hpp`: High-level robot behaviour for Task 3. Combines sensors, motors, and PID controllers into movement modes.
+- `include/Robot.hpp`: Declaration of the high-level robot interface and state.
+- `src/Part1.cpp`: Straight-line driving behaviour.
+- `src/Part2.cpp`: Front-wall distance behaviour.
+- `src/Part3.cpp`: Turning behaviour.
+- `src/Part4.cpp`: Command-string behaviour.
+- `src/Robot.cpp`: Robot setup, task dispatch, and helpers shared by multiple tasks.
 - `include/Motor.hpp`: Low-level motor PWM and direction control.
 - `include/Encoder.hpp`: Encoder counting and wheel rotation measurement.
 - `include/PIDController.hpp`: PID control helper.
@@ -41,7 +46,7 @@ The current files are starter code. Before the robot can run properly, fill in:
 
 Also update the motor and encoder pin numbers in `src/main.cpp` to match your robot wiring.
 
-## Task 3 Notes
+## Part 3 Notes
 
 - For straight-line tracking, use the IMU to correct heading while encoders measure distance.
 - For wall stopping, use the front lidar and tune the distance PID to settle at 100 mm from the wall.
