@@ -1,49 +1,57 @@
 # MTRN3100 Micromouse
 
-Arduino Nano starter code for the MTRN3100 micromouse project. The current code is organised around Task 3 simple driving: straight-line tracking, wall-distance stopping, turning, and chained maze commands.
+Firmware for an Arduino Nano-based micromouse. The program supports straight-line driving, stopping at a wall, controlled turns, and command strings made from `f`, `l`, and `r`.
 
-## Project Files
+## Project structure
 
-- `src/main.cpp`: Arduino entry point. Selects which task to run and creates the motors, encoders, lidar, IMU, and robot object.
-- `include/Robot.hpp`: High-level robot behaviour for Task 3. Combines sensors, motors, and PID controllers into movement modes.
-- `include/Motor.hpp`: Low-level motor PWM and direction control.
-- `include/Encoder.hpp`: Encoder counting and wheel rotation measurement.
-- `include/PIDController.hpp`: PID control helper.
-- `include/Lidar.hpp`: Front distance sensor interface.
-- `include/IMU.hpp`: Heading/yaw sensor interface.
+Configuration and interfaces live in `include/`; implementations live in `src/`.
 
-## Selecting A Task
+| File | Responsibility |
+| --- | --- |
+| `include/Config.hpp` | Pin assignments, sensor addresses, and physical constants |
+| `src/main.cpp` | Constructs the hardware and contains Arduino `setup()`/`loop()` |
+| `Display.hpp` / `Display.cpp` | OLED setup, status messages, and I2C diagnostics |
+| `Motor.hpp` / `Motor.cpp` | Motor direction and PWM output |
+| `Encoder.hpp` / `Encoder.cpp` | Encoder interrupts, counts, and wheel rotation |
+| `IMU.hpp` / `IMU.cpp` | MPU6050 setup, calibration, and integrated yaw |
+| `Lidar.hpp` / `Lidar.cpp` | VL6180X startup, addressing, and distance readings |
+| `Robot.hpp` / `Robot.cpp` | Robot startup and individual movement controllers |
+| `RobotCommands.cpp` | Multi-step command parsing and wall-centering logic |
 
-In `src/main.cpp`, change `ACTIVE_TASK`:
+The code uses statically allocated objects and does not use `String`, dynamic allocation, or heap-backed containers. Serial debug text uses Arduino's `F()` macro so it remains in flash instead of consuming the Nano's limited SRAM.
+
+## Hardware configuration
+
+Update `include/Config.hpp` when wiring, encoder resolution, wheel size, or sensor addresses change. Encoder channel A pins must support external interrupts; the current Nano configuration uses pins 2 and 3.
+
+The three VL6180X sensors start at the same default I2C address. `Robot::beginSensors()` holds all three in shutdown and then enables them one at a time so each can receive its configured address.
+
+## Selecting behavior
+
+`setup()` leaves the robot idle by default. Uncomment one behavior in `src/main.cpp` while testing:
 
 ```cpp
-#define ACTIVE_TASK RUN_STRAIGHT_LINE
+robot.startStraightLine(1000.0f);
+robot.startWallDistance(120.0f);
+robot.startTurnHold(-90.0f);
+robot.startCommandString("frfrfflflff");
 ```
 
-Available modes:
+Optional command-mode aids can be enabled before starting the command string:
 
-- `RUN_IDLE`: robot stays stopped
-- `RUN_STRAIGHT_LINE`: drive 1 m forward
-- `RUN_WALL_DISTANCE`: hold 100 mm from a front wall
-- `RUN_TURN`: turn 90 degrees clockwise and hold heading
-- `RUN_COMMAND_STRING`: run a command string such as `lfrfflfr`
+```cpp
+robot.enableLidarCentering(true);
+robot.enableFrontLidarSafety(true, 40);
+```
 
-## What Still Needs Implementation
+Direction signs depend on the physical motor and IMU orientation. If a turn moves away from its target, verify the motor wiring and the sign of the requested angle.
 
-The current files are starter code. Before the robot can run properly, fill in:
+## Build
 
-- motor pin setup and PWM output in `include/Motor.hpp`
-- encoder interrupts, counting, and rotation conversion in `include/Encoder.hpp`
-- PID maths in `include/PIDController.hpp`
-- real lidar library calls in `include/Lidar.hpp`
-- real IMU library calls and gyro calibration in `include/IMU.hpp`
-- command-string state machine in `include/Robot.hpp`
+Install PlatformIO, then run:
 
-Also update the motor and encoder pin numbers in `src/main.cpp` to match your robot wiring.
+```sh
+pio run
+```
 
-## Task 3 Notes
-
-- For straight-line tracking, use the IMU to correct heading while encoders measure distance.
-- For wall stopping, use the front lidar and tune the distance PID to settle at 100 mm from the wall.
-- For turning, use the IMU yaw angle and tune the turn PID until it stops within the required tolerance.
-- For chained movement, reuse the same forward and turn behaviours for each command.
+The configured environment is `nanoatmega328` in `platformio.ini`.
