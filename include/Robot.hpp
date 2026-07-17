@@ -124,6 +124,7 @@ public:
     void startTurn(float angle_deg) {
         task = TASK_TURN;
         finished = false;
+        turn_hold_enabled = false;
         target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
         turn_pid.zeroAndSetTarget(0, 0);
     }
@@ -151,7 +152,9 @@ public:
     void startTurnHold(float angle_deg) {
         task = TASK_TURN;
         finished = false;
+        turn_hold_enabled = true;
 
+        // Save this once. Do not recalculate it after the robot is disturbed.
         target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
 
         turn_pid.zeroAndSetTarget(0, 0);
@@ -310,10 +313,16 @@ private:
         Serial.print(" Error: ");
         Serial.println(yaw_error);
 
-        // If close enough, stop motors but KEEP holding this target
+        // Stop at the target. In hold mode TASK_TURN remains active, so a
+        // later pickup/release disturbance causes this controller to run again.
         if (fabs(yaw_error) <= turn_tolerance_deg) {
             stopMotors();
             finished = true;
+
+            if (!turn_hold_enabled) {
+                finishTask();
+            }
+
             return;
         }
 
@@ -584,6 +593,7 @@ private:
 
     RobotTask task = TASK_IDLE;
     bool finished = true;
+    bool turn_hold_enabled = false;
 
     int16_t base_pwm = 120;
     float target_distance_mm = 0;

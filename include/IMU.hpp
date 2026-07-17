@@ -16,8 +16,10 @@ public:
         writeRegister(0x6B, 0x00);
         delay(100);
 
-        // Gyro range: +/- 250 deg/s
-        writeRegister(0x1B, 0x00);
+        // Gyro range: +/- 1000 deg/s.
+        // A pickup disturbance can easily exceed the previous +/-250 deg/s
+        // range, which made the integrated yaw smaller than the real turn.
+        writeRegister(0x1B, 0x10);
         delay(100);
 
         calibrateGyro();
@@ -67,6 +69,11 @@ public:
     }
 
 private:
+    // MPU6050 sensitivity at the configured +/-1000 deg/s range.
+    static constexpr float gyroSensitivityLSBPerDPS() {
+        return 32.8f;
+    }
+
     void calibrateGyro() {
         long sum = 0;
         const int samples = 500;
@@ -79,7 +86,7 @@ private:
         }
 
         float raw_offset = static_cast<float>(sum) / samples;
-        gyro_z_offset_dps = raw_offset / 131.0;
+        gyro_z_offset_dps = raw_offset / gyroSensitivityLSBPerDPS();
 
         Serial.print("Gyro Z offset: ");
         Serial.println(gyro_z_offset_dps);
@@ -88,8 +95,7 @@ private:
     float readGyroZ() {
         int16_t raw = readRawGyroZ();
 
-        // MPU6050 +/-250 dps sensitivity = 131 LSB per deg/s
-        return static_cast<float>(raw) / 131.0;
+        return static_cast<float>(raw) / gyroSensitivityLSBPerDPS();
     }
 
     int16_t readRawGyroZ() {

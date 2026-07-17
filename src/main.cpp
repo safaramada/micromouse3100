@@ -63,10 +63,11 @@ void setup() {
     // // Stop if the front wall is closer than 40 mm
     // robot.enableFrontLidarSafety(true, 40);
 
-    robot.startCommandString(command_string);
-    // robot.startTurnHold(-90.0);
+    // robot.startCommandString(command_string);
+    robot.startTurnHold(-90.0);
     // since its from the bottom, plus 2cm so its plus 20cm
     // robot.startWallDistance(120);
+    // robot.startStraightLine(1000);
 
 }
 
