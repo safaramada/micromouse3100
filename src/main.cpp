@@ -47,7 +47,7 @@ Robot robot(
 StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
 
-const char command_string[] = "lfrfflfr";
+const char command_string[] = "frfrfflflff";
 
 void setup() {
     Serial.begin(115200);
@@ -58,12 +58,15 @@ void setup() {
     delay(1000);
 
     // Use the side LiDARs to help keep the robot centred
-    robot.enableLidarCentering(true);
+    // robot.enableLidarCentering(true);
 
-    // Stop if the front wall is closer than 40 mm
-    robot.enableFrontLidarSafety(true, 40);
+    // // Stop if the front wall is closer than 40 mm
+    // robot.enableFrontLidarSafety(true, 40);
 
     robot.startCommandString(command_string);
+    // robot.startTurnHold(-90.0);
+    // since its from the bottom, plus 2cm so its plus 20cm
+    // robot.startWallDistance(120);
 
 }
 
