@@ -114,12 +114,17 @@ public:
         task = TASK_WALL_DISTANCE;
         finished = false;
         target_wall_distance_mm = front_distance_mm;
+        target_yaw_deg = imu.getYawDeg();
         distance_pid.zeroAndSetTarget(0, 0);
+
+        Serial.print("Wall distance target yaw: ");
+        Serial.println(target_yaw_deg);
     }
 
     void startTurn(float angle_deg) {
         task = TASK_TURN;
         finished = false;
+        turn_hold_enabled = false;
         target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
         turn_pid.zeroAndSetTarget(0, 0);
     }
@@ -147,7 +152,9 @@ public:
     void startTurnHold(float angle_deg) {
         task = TASK_TURN;
         finished = false;
+        turn_hold_enabled = true;
 
+        // Save this once. Do not recalculate it after the robot is disturbed.
         target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
 
         turn_pid.zeroAndSetTarget(0, 0);
@@ -266,12 +273,32 @@ private:
             }
         }
 
-        setDrivePWM(pwm, pwm);
+        // Use the same IMU heading correction as Task 1 so that approaching
+        // (or reversing away from) the wall does not drive both wheels at the
+        // same PWM when the robot starts drifting.
+        float current_yaw = imu.getYawDeg();
+        float heading_error =
+            IMU::wrapAngleDeg(current_yaw - target_yaw_deg);
+
+        float Kp_heading = 4.0;
+        float correction = Kp_heading * heading_error;
+        correction = constrain(correction, -50, 50);
+
+        float left_pwm = constrain(pwm + correction, -180, 180);
+        float right_pwm = constrain(pwm - correction, -180, 180);
+
+        setDrivePWM(left_pwm, right_pwm);
 
         Serial.print("Wall error: ");
         Serial.print(error_mm);
-        Serial.print(" PWM: ");
-        Serial.println(pwm);
+        Serial.print(" Yaw: ");
+        Serial.print(current_yaw);
+        Serial.print(" Heading error: ");
+        Serial.print(heading_error);
+        Serial.print(" L_PWM: ");
+        Serial.print(left_pwm);
+        Serial.print(" R_PWM: ");
+        Serial.println(right_pwm);
     }
 
     void updateTurn() {
@@ -286,10 +313,16 @@ private:
         Serial.print(" Error: ");
         Serial.println(yaw_error);
 
-        // If close enough, stop motors but KEEP holding this target
+        // Stop at the target. In hold mode TASK_TURN remains active, so a
+        // later pickup/release disturbance causes this controller to run again.
         if (fabs(yaw_error) <= turn_tolerance_deg) {
             stopMotors();
             finished = true;
+
+            if (!turn_hold_enabled) {
+                finishTask();
+            }
+
             return;
         }
 
@@ -400,6 +433,18 @@ private:
                 Serial.print(front_distance_mm);
                 Serial.println(" mm");
 
+                char next_command = command_string[command_index +1];
+
+                if (next_command =='l' || next_command == 'L' ||
+                    next_command =='r' || next_command == 'R' ) {
+
+                        Serial.print("Skipping forward and starting next turn");
+
+                        completeCurrentCommand();
+                        return;
+                    }
+
+                Serial.print("No turn command available. Stopping.");
                 finishTask();
                 return;
             }
@@ -407,6 +452,11 @@ private:
 
         // Stop normally after travelling one maze cell
         if (distance_mm >= target_distance_mm) {
+
+            if (command_string[command_index +1] == '\0') {
+                finishTask();
+                return;
+            }
             completeCurrentCommand();
             return;
         }
@@ -543,6 +593,7 @@ private:
 
     RobotTask task = TASK_IDLE;
     bool finished = true;
+    bool turn_hold_enabled = false;
 
     int16_t base_pwm = 120;
     float target_distance_mm = 0;
