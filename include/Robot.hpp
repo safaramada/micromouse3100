@@ -110,12 +110,22 @@ public:
         Serial.println(target_yaw_deg);
     }
 
-    void startWallDistance(float front_distance_mm) {
+    void startWallDistance(float front_distance_mm = 100.0f) {
         task = TASK_WALL_DISTANCE;
         finished = false;
+
         target_wall_distance_mm = front_distance_mm;
         target_yaw_deg = imu.getYawDeg();
+
         distance_pid.zeroAndSetTarget(0, 0);
+
+        // Reset wall-distance controller state.
+        wall_holding_position = false;
+        wall_outside_band_start_ms = 0;
+
+        Serial.print("Wall distance target: ");
+        Serial.print(target_wall_distance_mm);
+        Serial.println(" mm");
 
         Serial.print("Wall distance target yaw: ");
         Serial.println(target_yaw_deg);
@@ -246,57 +256,120 @@ private:
         Serial.print(distance_mm);
         Serial.println(" mm");
 
-        if (!front_lidar.isReady() || front_lidar.timedOut() || distance_mm == 0) {
+        bool valid_reading =
+            front_lidar.isReady() &&
+            !front_lidar.timedOut() &&
+            distance_mm > 0;
+
+        if (!valid_reading) {
             stopMotors();
+            wall_outside_band_start_ms = 0;
+
             Serial.println("Invalid lidar reading. Stopping.");
             return;
         }
 
-        float error_mm = static_cast<float>(distance_mm) - target_wall_distance_mm;
+        float error_mm =
+            static_cast<float>(distance_mm) -
+            target_wall_distance_mm;
 
-        if (fabs(error_mm) <= wall_tolerance_mm) {
+        /*
+        * HOLDING STATE
+        *
+        * Once the robot reaches the target, keep the motors stopped.
+        * Small LiDAR changes will not make it immediately move again.
+        */
+        if (wall_holding_position) {
             stopMotors();
-            Serial.println("At target wall distance.");
+
+            if (fabs(error_mm) > wall_restart_tolerance_mm) {
+                // Start timing when the reading first leaves the larger band.
+                if (wall_outside_band_start_ms == 0) {
+                    wall_outside_band_start_ms = millis();
+                }
+
+                // Only restart if the error persists.
+                if (millis() - wall_outside_band_start_ms >=
+                    wall_restart_delay_ms) {
+
+                    wall_holding_position = false;
+                    wall_outside_band_start_ms = 0;
+
+                    distance_pid.zeroAndSetTarget(0, 0);
+
+                    Serial.println(
+                        "Wall moved. Restarting distance controller."
+                    );
+                }
+            } else {
+                // It returned inside the restart band, so it was likely noise.
+                wall_outside_band_start_ms = 0;
+            }
+
             return;
         }
 
-        float Kp_wall = 1.5;
-        float pwm = Kp_wall * error_mm;
+        /*
+        * MOVING STATE
+        *
+        * Enter the holding state when accurately positioned.
+        */
+        if (fabs(error_mm) <= wall_stop_tolerance_mm) {
+            stopMotors();
 
-        pwm = constrain(pwm, -120, 120);
+            wall_holding_position = true;
+            wall_outside_band_start_ms = 0;
 
-        if (fabs(pwm) < 65) {
-            if (pwm > 0) {
-                pwm = 65;
-            } else {
-                pwm = -65;
-            }
+            distance_pid.zeroAndSetTarget(0, 0);
+
+            Serial.println("At target wall distance. Holding position.");
+            return;
         }
 
-        // Use the same IMU heading correction as Task 1 so that approaching
-        // (or reversing away from) the wall does not drive both wheels at the
-        // same PWM when the robot starts drifting.
+        float Kp_wall = 1.5f;
+        float pwm = Kp_wall * error_mm;
+
+        pwm = constrain(pwm, -120.0f, 120.0f);
+
+        // Minimum PWM needed to overcome motor friction.
+        if (fabs(pwm) < 65.0f) {
+            pwm = (pwm > 0.0f) ? 65.0f : -65.0f;
+        }
+
+        // Heading correction to keep the robot straight.
         float current_yaw = imu.getYawDeg();
+
         float heading_error =
             IMU::wrapAngleDeg(current_yaw - target_yaw_deg);
 
-        float Kp_heading = 4.0;
+        float Kp_heading = 4.0f;
         float correction = Kp_heading * heading_error;
-        correction = constrain(correction, -50, 50);
 
-        float left_pwm = constrain(pwm + correction, -180, 180);
-        float right_pwm = constrain(pwm - correction, -180, 180);
+        correction = constrain(correction, -50.0f, 50.0f);
+
+        float left_pwm =
+            constrain(pwm + correction, -180.0f, 180.0f);
+
+        float right_pwm =
+            constrain(pwm - correction, -180.0f, 180.0f);
 
         setDrivePWM(left_pwm, right_pwm);
 
         Serial.print("Wall error: ");
         Serial.print(error_mm);
+
+        Serial.print(" Holding: ");
+        Serial.print(wall_holding_position);
+
         Serial.print(" Yaw: ");
         Serial.print(current_yaw);
+
         Serial.print(" Heading error: ");
         Serial.print(heading_error);
+
         Serial.print(" L_PWM: ");
         Serial.print(left_pwm);
+
         Serial.print(" R_PWM: ");
         Serial.println(right_pwm);
     }
@@ -597,12 +670,29 @@ private:
 
     int16_t base_pwm = 120;
     float target_distance_mm = 0;
-    float target_wall_distance_mm = 100;
+    // float target_wall_distance_mm = 100;
     float target_yaw_deg = 0;
     float start_left_rotation = 0;
     float start_right_rotation = 0;
-    float wall_tolerance_mm = 5;
+    // float wall_tolerance_mm = 5;
     float turn_tolerance_deg = 2;
+
+    // 23/07 attempt to change jittery porblem 
+    float target_wall_distance_mm = 100;
+
+    // Enter the resting state within ±4 mm.
+    const float wall_stop_tolerance_mm = 4.0f;
+
+    // Do not move again until the error exceeds ±8 mm.
+    const float wall_restart_tolerance_mm = 8.0f;
+
+    // The error must remain outside ±8 mm for this duration.
+    const unsigned long wall_restart_delay_ms = 150;
+
+    ////////
+
+    bool wall_holding_position = false;
+    unsigned long wall_outside_band_start_ms = 0;
 
     bool lidar_centering_enabled = false;
     float side_wall_target_mm = 45.0;

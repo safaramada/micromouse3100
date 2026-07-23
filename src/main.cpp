@@ -51,7 +51,8 @@ Robot robot(
 StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
 
-const char command_string[] = "frfrfflflff";
+// const char command_string[] = "frfrfflflff";
+const char command_string[] = "rflffrflf";
 
 bool i2cDevicePresent(uint8_t address) {
     Wire.beginTransmission(address);
@@ -122,7 +123,7 @@ void setup() {
     if (oledReady) {
         oled.clearDisplay();
         oled.drawString(0, 0, "Micromouse");
-        oled.drawString(0, 1, "Ready!");
+        oled.drawString(0, 1, "Ready!!!");
     }
 
     delay(1000);
@@ -133,11 +134,11 @@ void setup() {
     // // Stop if the front wall is closer than 40 mm
     // robot.enableFrontLidarSafety(true, 40);
 
-    // robot.startCommandString(command_string);
+    robot.startCommandString(command_string);
     // robot.startTurnHold(-90.0);
     // since its from the bottom, plus 2cm so its plus 20cm
-    // robot.startWallDistance(120);
-    // robot.startStraightLine(1000);
+    // robot.startWallDistance(120);   // DIRIVING AND STOPPING TASK 
+    // robot.startStraightLine(1000); // STRAIGHT LINE TRACKING TASK  
 
 }
 
