@@ -16,4 +16,7 @@ __pycache__/
 .vscode/
 
 # Generated output images
-path_planning/outputs/*
+path_planning/outputs
+
+# Captured test images
+path_planning/images/*
