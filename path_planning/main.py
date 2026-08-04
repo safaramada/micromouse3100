@@ -4,8 +4,10 @@ from pathlib import Path
 from maze_detector import (
     load_image,
     convert_to_grayscale,
+    apply_threshold,
     display_image,
-    save_grayscale_image
+    save_grayscale_image,
+    save_threshold_image
 )
 
 CAMERA_INDEX = 0
@@ -70,7 +72,9 @@ if __name__ == "__main__":
         display_image("Original Maze", maze_image)
 
         gray_image = convert_to_grayscale(maze_image)
-
         display_image("Grayscale Maze", gray_image)
-
         save_grayscale_image(gray_image)
+
+        binary_image = apply_threshold(gray_image)
+        display_image("Threshold Maze", binary_image)
+        save_threshold_image(binary_image)
