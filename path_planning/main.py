@@ -5,9 +5,12 @@ from maze_detector import (
     load_image,
     convert_to_grayscale,
     apply_threshold,
+    find_maze_boundary,
+    draw_maze_boundary,
     display_image,
     save_grayscale_image,
-    save_threshold_image
+    save_threshold_image,
+    save_boundary_image
 )
 
 CAMERA_INDEX = 0
@@ -78,3 +81,18 @@ if __name__ == "__main__":
         binary_image = apply_threshold(gray_image)
         display_image("Threshold Maze", binary_image)
         save_threshold_image(binary_image)
+
+        maze_contour = find_maze_boundary(binary_image)
+
+        if maze_contour is not None:
+            boundary_image = draw_maze_boundary(
+                maze_image,
+                maze_contour
+            )
+
+            display_image(
+                "Detected Maze Boundary",
+                boundary_image
+            )
+
+            save_boundary_image(boundary_image)

@@ -61,3 +61,49 @@ def save_threshold_image(binary_image):
         print(f"Threshold image saved to: {output_path}")
     else:
         print("Error: threshold image was not saved")
+
+def find_maze_boundary(binary_image):
+    # Find all external contours in the threshold image
+    contours, hierarchy = cv2.findContours(
+        binary_image,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    if len(contours) == 0:
+        print("Error: no contours were found")
+        return None
+
+    # Assume the largest contour is the outside of the maze
+    largest_contour = max(contours, key=cv2.contourArea)
+
+    return largest_contour
+
+
+def draw_maze_boundary(original_image, maze_contour):
+    # Make a copy so the original image is not changed
+    boundary_image = original_image.copy()
+
+    # Draw the contour in green
+    cv2.drawContours(
+        boundary_image,
+        [maze_contour],
+        -1,
+        (0, 255, 0),
+        5
+    )
+
+    return boundary_image
+
+
+def save_boundary_image(boundary_image):
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    output_path = OUTPUT_DIR / "maze_boundary.jpg"
+    saved = cv2.imwrite(str(output_path), boundary_image)
+
+    if saved:
+        print(f"Boundary image saved to: {output_path}")
+    else:
+        print("Error: boundary image was not saved")
+        
