@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <U8x8lib.h>
+// #include <U8x8lib.h>
+#include <SSD1306Ascii.h>
+#include <SSD1306AsciiWire.h>
 
 #include "Motor.hpp"
 #include "Encoder.hpp"
@@ -13,7 +15,8 @@
 
 using namespace mtrn3100;
 
-U8X8_SSD1306_128X64_NONAME_HW_I2C oled(U8X8_PIN_NONE);
+// U8X8_SSD1306_128X64_NONAME_HW_I2C oled(U8X8_PIN_NONE);
+SSD1306AsciiWire oled;
 bool oledReady = false;
 
 // Replace these pins with your real wiring
@@ -71,6 +74,25 @@ uint8_t findOledAddress() {
     return 0;
 }
 
+void displayPercent(uint8_t percent) {
+    if (!oledReady) {
+        return;
+    }
+
+    if (percent > 100) {
+        percent = 100;
+    }
+
+    oled.setCursor(0, 0);
+
+    // Clear the previous four-character field.
+    oled.print(F("    "));
+
+    oled.setCursor(0, 0);
+    oled.print(percent);
+    oled.print('%');
+}
+
 void printI2cDevices() {
     Serial.println(F("I2C devices found:"));
     bool foundAny = false;
@@ -96,35 +118,33 @@ void setup() {
     delay(1000);
 
     Wire.begin();
-    const uint8_t oledAddress = findOledAddress();
 
-    if (oledAddress != 0) {
-        // U8x8 expects the 8-bit form of the I2C address.
-        oled.setI2CAddress(oledAddress << 1);
-        oled.begin();
-        oled.setPowerSave(0);
-        oledReady = true;
-    }
+const uint8_t oledAddress = findOledAddress();
 
-    if (oledReady) {
-        Serial.print(F("OLED found at 0x"));
-        Serial.println(oledAddress, HEX);
-        oled.clearDisplay();
-        oled.setFont(u8x8_font_chroma48medium8_r);
-        oled.drawString(0, 0, "Micromouse");
-        oled.drawString(0, 1, "Initialising...");
-    } else {
-        Serial.println(F("OLED not found at 0x3C or 0x3D"));
-        printI2cDevices();
-    }
+if (oledAddress != 0) {
+    oled.begin(&Adafruit128x64, oledAddress);
+    oled.setFont(Adafruit5x7);
+    oled.clear();
 
-    robot.begin();
+    oledReady = true;
+}
 
-    if (oledReady) {
-        oled.clearDisplay();
-        oled.drawString(0, 0, "Micromouse");
-        oled.drawString(0, 1, "Ready!!!");
-    }
+if (oledReady) {
+    Serial.print(F("OLED found at 0x"));
+    Serial.println(oledAddress, HEX);
+
+    displayPercent(0);
+} else {
+    Serial.println(F("OLED not found at 0x3C or 0x3D"));
+    printI2cDevices();
+}
+
+robot.begin();
+
+if (oledReady) {
+    displayPercent(100);
+}
+
 
     delay(1000);
 
