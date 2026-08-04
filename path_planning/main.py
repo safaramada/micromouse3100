@@ -1,6 +1,12 @@
 import cv2
 from pathlib import Path
 
+from maze_detector import (
+    load_image,
+    convert_to_grayscale,
+    display_image,
+    save_grayscale_image
+)
 
 CAMERA_INDEX = 0
 
@@ -57,3 +63,14 @@ def capture_maze_image() -> None:
 
 if __name__ == "__main__":
     capture_maze_image()
+
+    maze_image = load_image()
+
+    if maze_image is not None:
+        display_image("Original Maze", maze_image)
+
+        gray_image = convert_to_grayscale(maze_image)
+
+        display_image("Grayscale Maze", gray_image)
+
+        save_grayscale_image(gray_image)
