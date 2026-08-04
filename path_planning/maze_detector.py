@@ -216,3 +216,53 @@ def save_warped_image(warped_image):
     cv2.imwrite(str(output_path), warped_image)
 
     print(f"Top-down maze image saved to: {output_path}")
+
+def draw_maze_grid(warped_image):
+    grid_image = warped_image.copy()
+
+    number_of_cells = 9
+
+    image_height, image_width = grid_image.shape[:2]
+
+    cell_width = image_width // number_of_cells
+    cell_height = image_height // number_of_cells
+
+    # Draw the vertical grid lines
+    for column in range(number_of_cells + 1):
+        x = column * cell_width
+
+        cv2.line(
+            grid_image,
+            (x, 0),
+            (x, image_height),
+            (255, 0, 0),
+            2
+        )
+
+    # Draw the horizontal grid lines
+    for row in range(number_of_cells + 1):
+        y = row * cell_height
+
+        cv2.line(
+            grid_image,
+            (0, y),
+            (image_width, y),
+            (255, 0, 0),
+            2
+        )
+
+    return grid_image
+
+def save_grid_image(grid_image):
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    output_path = OUTPUT_DIR / "maze_grid.jpg"
+
+    saved = cv2.imwrite(str(output_path), grid_image)
+
+    if saved:
+        print(f"Maze grid image saved to: {output_path}")
+    else:
+        print("Error: maze grid image was not saved")
+
+        

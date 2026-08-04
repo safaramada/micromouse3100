@@ -10,12 +10,14 @@ from maze_detector import (
     get_maze_corners,
     draw_corner_points,
     warp_maze_image,
+    draw_maze_grid,
     display_image,
     save_grayscale_image,
     save_threshold_image,
     save_boundary_image,
     save_corner_image,
-    save_warped_image
+    save_warped_image,
+    save_grid_image
 )
 
 CAMERA_INDEX = 0
@@ -144,50 +146,11 @@ if __name__ == "__main__":
 
                 save_warped_image(warped_image)
 
-def draw_maze_grid(warped_image):
-    grid_image = warped_image.copy()
+                grid_image = draw_maze_grid(warped_image)
 
-    number_of_cells = 9
+                display_image(
+                    "Maze Grid",
+                    grid_image
+                )
 
-    image_height, image_width = grid_image.shape[:2]
-
-    cell_width = image_width // number_of_cells
-    cell_height = image_height // number_of_cells
-
-    # Draw the vertical grid lines
-    for column in range(number_of_cells + 1):
-        x = column * cell_width
-
-        cv2.line(
-            grid_image,
-            (x, 0),
-            (x, image_height),
-            (255, 0, 0),
-            2
-        )
-
-    # Draw the horizontal grid lines
-    for row in range(number_of_cells + 1):
-        y = row * cell_height
-
-        cv2.line(
-            grid_image,
-            (0, y),
-            (image_width, y),
-            (255, 0, 0),
-            2
-        )
-
-    return grid_image
-
-def save_grid_image(grid_image):
-    OUTPUT_DIR.mkdir(exist_ok=True)
-
-    output_path = OUTPUT_DIR / "maze_grid.jpg"
-
-    saved = cv2.imwrite(str(output_path), grid_image)
-
-    if saved:
-        print(f"Maze grid image saved to: {output_path}")
-    else:
-        print("Error: maze grid image was not saved")
+                save_grid_image(grid_image)
