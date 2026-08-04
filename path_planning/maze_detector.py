@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 from pathlib import Path
 
 
@@ -106,4 +107,112 @@ def save_boundary_image(boundary_image):
         print(f"Boundary image saved to: {output_path}")
     else:
         print("Error: boundary image was not saved")
-        
+
+def get_maze_corners(maze_contour):
+    # Estimate the outside contour as a four-corner shape
+    perimeter = cv2.arcLength(maze_contour, True)
+
+    corners = cv2.approxPolyDP(
+        maze_contour,
+        0.02 * perimeter,
+        True
+    )
+
+    if len(corners) != 4:
+        print("Error: maze boundary does not have four corners")
+        return None
+
+    # Convert from OpenCV contour format into four x-y points
+    corners = corners.reshape(4, 2)
+
+    return corners
+
+
+def order_corner_points(corners):
+    # Create space for the ordered corner points
+    ordered = np.zeros((4, 2), dtype=np.float32)
+
+    # x + y is smallest at the top-left
+    # x + y is largest at the bottom-right
+    point_sum = corners.sum(axis=1)
+
+    ordered[0] = corners[np.argmin(point_sum)]
+    ordered[2] = corners[np.argmax(point_sum)]
+
+    # y - x is smallest at the top-right
+    # y - x is largest at the bottom-left
+    point_difference = np.diff(corners, axis=1).flatten()
+
+    ordered[1] = corners[np.argmin(point_difference)]
+    ordered[3] = corners[np.argmax(point_difference)]
+
+    return ordered
+
+
+def warp_maze_image(original_image, corners):
+    ordered_corners = order_corner_points(corners)
+
+    top_left = ordered_corners[0]
+    top_right = ordered_corners[1]
+    bottom_right = ordered_corners[2]
+    bottom_left = ordered_corners[3]
+
+    # Use a fixed square output size
+    output_size = 900
+
+    destination_points = np.array(
+        [
+            [0, 0],
+            [output_size - 1, 0],
+            [output_size - 1, output_size - 1],
+            [0, output_size - 1]
+        ],
+        dtype=np.float32
+    )
+
+    transform_matrix = cv2.getPerspectiveTransform(
+        ordered_corners,
+        destination_points
+    )
+
+    warped_image = cv2.warpPerspective(
+        original_image,
+        transform_matrix,
+        (output_size, output_size)
+    )
+
+    return warped_image
+
+
+def draw_corner_points(original_image, corners):
+    corner_image = original_image.copy()
+
+    for point in corners:
+        x, y = point
+        cv2.circle(
+            corner_image,
+            (int(x), int(y)),
+            10,
+            (0, 0, 255),
+            -1
+        )
+
+    return corner_image
+
+
+def save_corner_image(corner_image):
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    output_path = OUTPUT_DIR / "maze_corners.jpg"
+    cv2.imwrite(str(output_path), corner_image)
+
+    print(f"Corner image saved to: {output_path}")
+
+
+def save_warped_image(warped_image):
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    output_path = OUTPUT_DIR / "top_down_maze.jpg"
+    cv2.imwrite(str(output_path), warped_image)
+
+    print(f"Top-down maze image saved to: {output_path}")
