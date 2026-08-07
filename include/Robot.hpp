@@ -4,6 +4,7 @@
 #include <math.h>
 
 #include "Encoder.hpp"
+#include "ExtendedKalmanFilter.hpp"
 #include "IMU.hpp"
 #include "Lidar.hpp"
 #include "Motor.hpp"
@@ -49,10 +50,10 @@ public:
           right_lidar(right_lidar),
           imu(imu),
           wheel_radius_mm(wheel_radius_mm),
-          wheel_base_mm(wheel_base_mm),
-          heading_pid(4.0, 0.0, 0.0),
-          distance_pid(2.0, 0.0, 0.0),
-          turn_pid(4.0, 0.0, 0.0) {}
+          ekf(wheel_base_mm),
+          heading_pid(2.0, 0.0, 0.06),
+          distance_pid(1.2, 0.02, 0.04),
+          turn_pid(1.6, 0.0, 0.10) {}
 
     void begin() {
         left_encoder.begin();
@@ -62,6 +63,7 @@ public:
 
         imu.begin();
         imu.zeroYaw();
+        initialiseStateEstimator();
 
         stop();
     }
@@ -94,17 +96,19 @@ public:
     }
 
 
-    void startStraightLine(float distance_mm, int16_t pwm = 140) {
+    void startStraightLine(float distance_mm, int16_t pwm = 130) {
         task = TASK_STRAIGHT_LINE;
         finished = false;
 
         target_distance_mm = distance_mm;
-        base_pwm = abs(pwm);
+        base_pwm = constrain(abs(pwm), 80, 180);
 
         start_left_rotation = left_encoder.getRotation();
         start_right_rotation = right_encoder.getRotation();
 
-        target_yaw_deg = imu.getYawDeg();
+        target_yaw_deg = getHeadingDeg();
+        heading_pid.reset();
+        resetLidarCenteringState();
 
         Serial.print("Straight line target yaw: ");
         Serial.println(target_yaw_deg);
@@ -115,9 +119,10 @@ public:
         finished = false;
 
         target_wall_distance_mm = front_distance_mm;
-        target_yaw_deg = imu.getYawDeg();
+        target_yaw_deg = getHeadingDeg();
 
-        distance_pid.zeroAndSetTarget(0, 0);
+        distance_pid.reset();
+        heading_pid.reset();
 
         // Reset wall-distance controller state.
         wall_holding_position = false;
@@ -135,23 +140,28 @@ public:
         task = TASK_TURN;
         finished = false;
         turn_hold_enabled = false;
-        target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
-        turn_pid.zeroAndSetTarget(0, 0);
+        target_yaw_deg = IMU::wrapAngleDeg(getHeadingDeg() + angle_deg);
+        beginTurnController();
     }
 
-    void startCommandString(const char commands[]) {
+    void startCommandString(const char commands[], int16_t pwm = 130) {
         task = TASK_COMMAND_STRING;
         finished = false;
         command_string = commands;
         command_index = 0;
         command_state = COMMAND_READY;
+        active_forward_command_count = 1;
+        command_pause_active = false;
+        base_pwm = constrain(abs(pwm), 80, 180);
 
         stopMotors();
+        resetLidarCenteringState();
     }
 
-    void enableLidarCentering(bool enabled, float target_side_distance_mm = 45.0) {
+    void enableLidarCentering(bool enabled, float target_side_distance_mm = 50.0) {
         lidar_centering_enabled = enabled;
         side_wall_target_mm = target_side_distance_mm;
+        resetLidarCenteringState();
     }
 
     void enableFrontLidarSafety(bool enabled, uint16_t stop_distance_mm = 40) {
@@ -165,16 +175,16 @@ public:
         turn_hold_enabled = true;
 
         // Save this once. Do not recalculate it after the robot is disturbed.
-        target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
+        target_yaw_deg = IMU::wrapAngleDeg(getHeadingDeg() + angle_deg);
 
-        turn_pid.zeroAndSetTarget(0, 0);
+        beginTurnController();
 
         Serial.print("Turn hold target yaw: ");
         Serial.println(target_yaw_deg);
     }
 
     void update() {
-        imu.update();
+        updateStateEstimate();
 
         switch (task) {
             case TASK_STRAIGHT_LINE:
@@ -204,6 +214,20 @@ public:
         return finished;
     }
 
+    float getPoseXMM() const {
+        return ekf.getXMM();
+    }
+
+    float getPoseYMM() const {
+        return ekf.getYMM();
+    }
+
+    float getHeadingDeg() {
+        return ekf.isInitialised()
+            ? ekf.getHeadingDeg()
+            : imu.getYawDeg();
+    }
+
     void stop() {
         stopMotors();
         task = TASK_IDLE;
@@ -219,21 +243,26 @@ private:
             return;
         }
 
-        float current_yaw = imu.getYawDeg();
+        float current_yaw = getHeadingDeg();
 
         // Positive if robot has rotated away from starting heading
         float heading_error = IMU::wrapAngleDeg(current_yaw - target_yaw_deg);
 
-        float Kp_heading = 4.0;
-        float correction = Kp_heading * heading_error;
+        float imu_correction = heading_pid.computeFromError(heading_error);
+        float lidar_correction = getLidarCenteringCorrection();
 
-        correction = constrain(correction, -50, 50);
+        // Speed up the wheel nearest a wall and slow the opposite wheel,
+        // steering the robot away from that wall.
+        float correction = imu_correction + lidar_correction;
 
-        float left_pwm = base_pwm + correction;
-        float right_pwm = base_pwm - correction;
+        correction = constrain(
+            correction,
+            -max_forward_correction,
+            max_forward_correction
+        );
 
-        left_pwm = constrain(left_pwm, 80, 180);
-        right_pwm = constrain(right_pwm, 80, 180);
+        float left_pwm = constrain(base_pwm + correction, 80, 180);
+        float right_pwm = constrain(base_pwm - correction, 80, 180);
 
         setDrivePWM(left_pwm, right_pwm);
 
@@ -256,10 +285,7 @@ private:
         Serial.print(distance_mm);
         Serial.println(" mm");
 
-        bool valid_reading =
-            front_lidar.isReady() &&
-            !front_lidar.timedOut() &&
-            distance_mm > 0;
+        bool valid_reading = front_lidar.isReadingValid();
 
         if (!valid_reading) {
             stopMotors();
@@ -295,7 +321,7 @@ private:
                     wall_holding_position = false;
                     wall_outside_band_start_ms = 0;
 
-                    distance_pid.zeroAndSetTarget(0, 0);
+                    distance_pid.reset(error_mm);
 
                     Serial.println(
                         "Wall moved. Restarting distance controller."
@@ -320,14 +346,13 @@ private:
             wall_holding_position = true;
             wall_outside_band_start_ms = 0;
 
-            distance_pid.zeroAndSetTarget(0, 0);
+            distance_pid.reset();
 
             Serial.println("At target wall distance. Holding position.");
             return;
         }
 
-        float Kp_wall = 1.5f;
-        float pwm = Kp_wall * error_mm;
+        float pwm = distance_pid.computeFromError(error_mm);
 
         pwm = constrain(pwm, -120.0f, 120.0f);
 
@@ -337,13 +362,12 @@ private:
         }
 
         // Heading correction to keep the robot straight.
-        float current_yaw = imu.getYawDeg();
+        float current_yaw = getHeadingDeg();
 
         float heading_error =
             IMU::wrapAngleDeg(current_yaw - target_yaw_deg);
 
-        float Kp_heading = 4.0f;
-        float correction = Kp_heading * heading_error;
+        float correction = heading_pid.computeFromError(heading_error);
 
         correction = constrain(correction, -50.0f, 50.0f);
 
@@ -375,7 +399,7 @@ private:
     }
 
     void updateTurn() {
-        float current_yaw = imu.getYawDeg();
+        float current_yaw = getHeadingDeg();
 
         float yaw_error = IMU::wrapAngleDeg(target_yaw_deg - current_yaw);
 
@@ -390,8 +414,17 @@ private:
         // later pickup/release disturbance causes this controller to run again.
         if (fabs(yaw_error) <= turn_tolerance_deg) {
             stopMotors();
-            finished = true;
 
+            if (turn_settle_start_ms == 0) {
+                turn_settle_start_ms = millis();
+            }
+
+            if (millis() - turn_settle_start_ms < turn_settle_time_ms) {
+                finished = false;
+                return;
+            }
+
+            finished = true;
             if (!turn_hold_enabled) {
                 finishTask();
             }
@@ -399,21 +432,10 @@ private:
             return;
         }
 
+        turn_settle_start_ms = 0;
         finished = false;
 
-        float Kp_turn = 2.5;
-        float pwm = Kp_turn * yaw_error;
-
-        pwm = constrain(pwm, -120, 120);
-
-        // Minimum PWM so the robot can actually overcome friction
-        if (fabs(pwm) < 65) {
-            if (pwm > 0) {
-                pwm = 65;
-            } else {
-                pwm = -65;
-            }
-        }
+        float pwm = getTurnPWM(yaw_error);
 
         /*
         This sign may need flipping depending on your motor wiring.
@@ -430,6 +452,14 @@ private:
         }
 
         if (command_state == COMMAND_READY) {
+            if (command_pause_active) {
+                if (millis() - command_pause_start_ms < command_pause_time_ms) {
+                    return;
+                }
+
+                command_pause_active = false;
+            }
+
             startNextCommand();
             return;
         }
@@ -454,29 +484,40 @@ private:
         }
 
         if (command == 'f' || command == 'F') {
+            active_forward_command_count = 1;
+
+            // Run consecutive forward cells as one continuous movement. This
+            // avoids adding a separate stop/overshoot error at every cell.
+            while (command_string[command_index + active_forward_command_count] == 'f' ||
+                   command_string[command_index + active_forward_command_count] == 'F') {
+                active_forward_command_count++;
+            }
+
             start_left_rotation = left_encoder.getRotation();
             start_right_rotation = right_encoder.getRotation();
 
-            target_distance_mm = maze_cell_distance_mm;
-            target_yaw_deg = imu.getYawDeg();
+            target_distance_mm =
+                maze_cell_distance_mm * active_forward_command_count;
+            target_yaw_deg = getHeadingDeg();
 
-            heading_pid.zeroAndSetTarget(0, 0);
+            heading_pid.reset();
+            resetLidarCenteringState();
             command_state = COMMAND_FORWARD;
         }
 
         else if (command == 'l' || command == 'L') {
             target_yaw_deg =
-                IMU::wrapAngleDeg(imu.getYawDeg() + 90.0);
+                IMU::wrapAngleDeg(getHeadingDeg() + 90.0);
 
-            turn_pid.zeroAndSetTarget(0, 0);
+            beginTurnController();
             command_state = COMMAND_TURN;
         }
-        
+
         else if (command == 'r' || command == 'R') {
             target_yaw_deg =
-                IMU::wrapAngleDeg(imu.getYawDeg() - 90.0);
+                IMU::wrapAngleDeg(getHeadingDeg() - 90.0);
 
-            turn_pid.zeroAndSetTarget(0, 0);
+            beginTurnController();
             command_state = COMMAND_TURN;
         }
         else {
@@ -489,15 +530,14 @@ private:
 
     void updateForwardCommand() {
         float distance_mm = getAverageDistanceMM();
+        char next_command =
+            command_string[command_index + active_forward_command_count];
 
         // Front LiDAR collision check
         if (front_lidar_safety_enabled) {
             uint16_t front_distance_mm = front_lidar.readDistance();
 
-            bool valid_front_reading =
-                front_lidar.isReady() &&
-                !front_lidar.timedOut() &&
-                front_distance_mm > 0;
+            bool valid_front_reading = front_lidar.isReadingValid();
 
             if (valid_front_reading &&
                 front_distance_mm <= front_stop_distance_mm) {
@@ -506,14 +546,12 @@ private:
                 Serial.print(front_distance_mm);
                 Serial.println(" mm");
 
-                char next_command = command_string[command_index +1];
-
                 if (next_command =='l' || next_command == 'L' ||
                     next_command =='r' || next_command == 'R' ) {
 
                         Serial.print("Skipping forward and starting next turn");
 
-                        completeCurrentCommand();
+                        completeCurrentCommand(active_forward_command_count);
                         return;
                     }
 
@@ -521,103 +559,261 @@ private:
                 finishTask();
                 return;
             }
+
+            // The LiDAR call blocks while the robot is still moving, so use a
+            // fresh encoder value for the stopping decision.
+            distance_mm = getAverageDistanceMM();
         }
 
-        // Stop normally after travelling one maze cell
-        if (distance_mm >= target_distance_mm) {
-
-            if (command_string[command_index +1] == '\0') {
-                finishTask();
-                return;
-            }
-            completeCurrentCommand();
+        if (finishForwardRunIfNeeded(distance_mm, next_command)) {
             return;
         }
 
-        float heading_error =
-            IMU::wrapAngleDeg(imu.getYawDeg() - target_yaw_deg);
-
-        float imu_correction = 4.0 * heading_error;
         float lidar_correction = getLidarCenteringCorrection();
+
+        // Side LiDAR calls also block. Do not issue another forward command if
+        // the encoder target was crossed while waiting for them.
+        distance_mm = getAverageDistanceMM();
+        if (finishForwardRunIfNeeded(distance_mm, next_command)) {
+            return;
+        }
+
+        updateStateEstimate();
+        float heading_error =
+            IMU::wrapAngleDeg(getHeadingDeg() - target_yaw_deg);
+
+        float imu_correction = heading_pid.computeFromError(heading_error);
 
         float correction =
             imu_correction + lidar_correction;
 
-        correction = constrain(correction, -50, 50);
+        correction = constrain(
+            correction,
+            -max_forward_correction,
+            max_forward_correction
+        );
 
-        float left_pwm =
-            constrain(base_pwm + correction, 80, 180);
-
-        float right_pwm =
-            constrain(base_pwm - correction, 80, 180);
+        float forward_pwm = getForwardApproachPWM(distance_mm);
+        float left_pwm = constrain(forward_pwm + correction, 80, 180);
+        float right_pwm = constrain(forward_pwm - correction, 80, 180);
 
         setDrivePWM(left_pwm, right_pwm);
     }
 
     float getLidarCenteringCorrection() {
         if (!lidar_centering_enabled) {
+            resetLidarCenteringState();
             return 0;
         }
 
-        uint16_t left_distance_mm = left_lidar.readDistance();
-        bool left_wall = isValidSideWall(left_lidar, left_distance_mm);
+        uint16_t left_reading_mm = left_lidar.readDistance();
+        bool left_wall = isValidSideWall(left_lidar, left_reading_mm);
 
-        uint16_t right_distance_mm = right_lidar.readDistance();
-        bool right_wall = isValidSideWall(right_lidar, right_distance_mm);
+        uint16_t right_reading_mm = right_lidar.readDistance();
+        bool right_wall = isValidSideWall(right_lidar, right_reading_mm);
+
+        float left_distance_mm = 0;
+        float right_distance_mm = 0;
+
+        if (left_wall) {
+            left_distance_mm = filterSideDistance(
+                left_reading_mm,
+                filtered_left_distance_mm,
+                left_lidar_filter_ready
+            );
+        } else {
+            left_lidar_filter_ready = false;
+        }
+
+        if (right_wall) {
+            right_distance_mm = filterSideDistance(
+                right_reading_mm,
+                filtered_right_distance_mm,
+                right_lidar_filter_ready
+            );
+        } else {
+            right_lidar_filter_ready = false;
+        }
+
+        uint8_t wall_state =
+            (left_wall ? 0x01 : 0x00) |
+            (right_wall ? 0x02 : 0x00);
+
+        if (wall_state == 0) {
+            resetLidarCenteringState();
+            return 0;
+        }
+
+        // A corner changes which walls are visible. Start the new correction
+        // from zero instead of blending it with the previous corridor.
+        if (wall_state != lidar_wall_state) {
+            lidar_wall_state = wall_state;
+            current_lidar_correction = 0;
+        }
 
         float wall_error_mm = 0;
 
         if (left_wall && right_wall) {
-            wall_error_mm = static_cast<float>(right_distance_mm) - left_distance_mm;
+            wall_error_mm = right_distance_mm - left_distance_mm;
         } else if (left_wall) {
             wall_error_mm = side_wall_target_mm - left_distance_mm;
         } else if (right_wall) {
-            wall_error_mm = static_cast<float>(right_distance_mm) - side_wall_target_mm;
-        } else {
-            return 0;
+            wall_error_mm = right_distance_mm - side_wall_target_mm;
         }
 
-        float correction = lidar_centering_kp * wall_error_mm;
-        return constrain(correction, -max_lidar_correction, max_lidar_correction);
+        // Ignore small differences caused by normal sensor noise. Removing the
+        // deadband from larger errors keeps the correction continuous.
+        if (fabs(wall_error_mm) <= lidar_centering_deadband_mm) {
+            wall_error_mm = 0;
+        } else {
+            if (wall_error_mm > 0) {
+                wall_error_mm -= lidar_centering_deadband_mm;
+            } else {
+                wall_error_mm += lidar_centering_deadband_mm;
+            }
+        }
+
+        float target_correction = constrain(
+            lidar_centering_kp * wall_error_mm,
+            -max_lidar_correction,
+            max_lidar_correction
+        );
+
+        return slewLidarCorrection(target_correction);
     }
 
     bool isValidSideWall(Lidar& lidar, uint16_t distance_mm) {
-        return lidar.isReady() &&
-               !lidar.timedOut() &&
+        return lidar.isReadingValid() &&
                distance_mm >= min_side_wall_mm &&
                distance_mm <= max_side_wall_mm;
     }
 
+    float filterSideDistance(uint16_t reading_mm,
+                             float& filtered_distance_mm,
+                             bool& filter_ready) {
+        if (!filter_ready) {
+            filtered_distance_mm = static_cast<float>(reading_mm);
+            filter_ready = true;
+        } else {
+            filtered_distance_mm += side_lidar_filter_alpha *
+                (static_cast<float>(reading_mm) - filtered_distance_mm);
+        }
+
+        return filtered_distance_mm;
+    }
+
+    float slewLidarCorrection(float target_correction) {
+        float change = target_correction - current_lidar_correction;
+        change = constrain(
+            change,
+            -max_lidar_correction_step,
+            max_lidar_correction_step
+        );
+
+        current_lidar_correction += change;
+        return current_lidar_correction;
+    }
+
+    void resetLidarCenteringState() {
+        left_lidar_filter_ready = false;
+        right_lidar_filter_ready = false;
+        filtered_left_distance_mm = 0;
+        filtered_right_distance_mm = 0;
+        current_lidar_correction = 0;
+        lidar_wall_state = 0;
+    }
+
     void updateTurnCommand() {
         float yaw_error =
-            IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
+            IMU::wrapAngleDeg(target_yaw_deg - getHeadingDeg());
 
         if (fabs(yaw_error) <= turn_tolerance_deg) {
-            completeCurrentCommand();
+            stopMotors();
+
+            if (turn_settle_start_ms == 0) {
+                turn_settle_start_ms = millis();
+            }
+
+            if (millis() - turn_settle_start_ms >= turn_settle_time_ms) {
+                completeCurrentCommand();
+            }
+
             return;
         }
 
-        // AI-assisted change: match the proven Task 3 turning controller.
-        float Kp_turn = 2.5;
-        float pwm = Kp_turn * yaw_error;
-
-        pwm = constrain(pwm, -120, 120);
-
-        if (fabs(pwm) < 65) {
-            if (pwm > 0) {
-                pwm = 65;
-            } else {
-                pwm = -65;
-            }
-        }
+        turn_settle_start_ms = 0;
+        float pwm = getTurnPWM(yaw_error);
 
         setDrivePWM(-pwm, pwm);
     }
 
-    void completeCurrentCommand() {
+    float getTurnPWM(float yaw_error) {
+        float pwm = turn_pid.computeFromError(yaw_error);
+        float minimum_pwm =
+            (fabs(yaw_error) <= turn_slow_angle_deg)
+                ? min_turn_near_target_pwm
+                : min_turn_pwm;
+
+        if (yaw_error > 0) {
+            return constrain(pwm, minimum_pwm, max_turn_pwm);
+        }
+
+        return constrain(pwm, -max_turn_pwm, -minimum_pwm);
+    }
+
+    void beginTurnController() {
+        float initial_error =
+            IMU::wrapAngleDeg(target_yaw_deg - getHeadingDeg());
+
+        turn_pid.reset(initial_error);
+        turn_settle_start_ms = 0;
+        resetLidarCenteringState();
+    }
+
+    bool finishForwardRunIfNeeded(float distance_mm, char next_command) {
+        if (distance_mm < target_distance_mm) {
+            return false;
+        }
+
+        if (next_command == '\0') {
+            finishTask();
+        } else {
+            completeCurrentCommand(active_forward_command_count);
+        }
+
+        return true;
+    }
+
+    float getForwardApproachPWM(float distance_mm) {
+        float remaining_mm = target_distance_mm - distance_mm;
+
+        if (remaining_mm >= forward_slowdown_distance_mm) {
+            return base_pwm;
+        }
+
+        float slowdown_ratio = constrain(
+            remaining_mm / forward_slowdown_distance_mm,
+            0.0f,
+            1.0f
+        );
+
+        return min_forward_approach_pwm +
+            (base_pwm - min_forward_approach_pwm) * slowdown_ratio;
+    }
+
+    void completeCurrentCommand(uint8_t command_count = 1) {
         stopMotors();
 
-        command_index++;
+        command_index += command_count;
+
+        char next_command = command_string[command_index];
+        bool next_is_turn =
+            next_command == 'l' || next_command == 'L' ||
+            next_command == 'r' || next_command == 'R';
+
+        command_pause_active =
+            command_state == COMMAND_FORWARD && next_is_turn;
+        command_pause_start_ms = millis();
         command_state = COMMAND_READY;
     }
 
@@ -630,7 +826,83 @@ private:
         return average_rotation * wheel_radius_mm;
     }
 
+    void initialiseStateEstimator() {
+        previous_left_estimator_rotation = left_encoder.getRotation();
+        previous_right_estimator_rotation = right_encoder.getRotation();
+        left_encoder_polarity = 0;
+        right_encoder_polarity = 0;
+        last_left_motion_direction = 0;
+        last_right_motion_direction = 0;
+
+        ekf.reset(0.0f, 0.0f, imu.getYawDeg());
+        ekf.begin(imu.getYawDeg());
+    }
+
+    void updateStateEstimate() {
+        imu.update();
+
+        float left_rotation = left_encoder.getRotation();
+        float right_rotation = right_encoder.getRotation();
+        float raw_left_delta =
+            left_rotation - previous_left_estimator_rotation;
+        float raw_right_delta =
+            right_rotation - previous_right_estimator_rotation;
+
+        previous_left_estimator_rotation = left_rotation;
+        previous_right_estimator_rotation = right_rotation;
+
+        float left_delta = normaliseEncoderDelta(
+            raw_left_delta,
+            last_left_motion_direction,
+            left_encoder_polarity
+        );
+        float right_delta = normaliseEncoderDelta(
+            raw_right_delta,
+            last_right_motion_direction,
+            right_encoder_polarity
+        );
+
+        ekf.updateWheelDistances(
+            left_delta * wheel_radius_mm,
+            right_delta * wheel_radius_mm,
+            imu.getYawDeg()
+        );
+    }
+
+    float normaliseEncoderDelta(float raw_delta,
+                                int8_t commanded_direction,
+                                int8_t& encoder_polarity) {
+        if (fabs(raw_delta) < 0.000001f) {
+            return 0.0f;
+        }
+
+        if (encoder_polarity == 0 && commanded_direction != 0) {
+            int8_t raw_direction = raw_delta > 0.0f ? 1 : -1;
+            encoder_polarity = commanded_direction * raw_direction;
+        }
+
+        // Until this wheel has moved under a known command, ignoring its
+        // delta is safer than allowing an unknown sign to rotate the EKF.
+        if (encoder_polarity == 0) {
+            return 0.0f;
+        }
+
+        return raw_delta * encoder_polarity;
+    }
+
     void setDrivePWM(float left_pwm, float right_pwm) {
+        if (left_pwm > 0.0f) {
+            last_left_motion_direction = 1;
+        } else if (left_pwm < 0.0f) {
+            last_left_motion_direction = -1;
+        }
+
+        if (right_pwm > 0.0f) {
+            last_right_motion_direction = 1;
+        } else if (right_pwm < 0.0f) {
+            last_right_motion_direction = -1;
+        }
+
         left_motor.setPWM(static_cast<int16_t>(constrain(-left_pwm, -255, 255)));
 
         // Right motor is inverted because negative PWM was forward for your robot
@@ -658,7 +930,15 @@ private:
     IMU& imu;
 
     const float wheel_radius_mm;
-    const float wheel_base_mm;
+
+    ExtendedKalmanFilter ekf;
+
+    float previous_left_estimator_rotation = 0.0f;
+    float previous_right_estimator_rotation = 0.0f;
+    int8_t left_encoder_polarity = 0;
+    int8_t right_encoder_polarity = 0;
+    int8_t last_left_motion_direction = 0;
+    int8_t last_right_motion_direction = 0;
 
     PIDController heading_pid;
     PIDController distance_pid;
@@ -675,9 +955,18 @@ private:
     float start_left_rotation = 0;
     float start_right_rotation = 0;
     // float wall_tolerance_mm = 5;
-    float turn_tolerance_deg = 2;
+    float turn_tolerance_deg = 3;
+    unsigned long turn_settle_start_ms = 0;
+    const unsigned long turn_settle_time_ms = 100;
+    const float max_turn_pwm = 90.0;
+    const float min_turn_pwm = 55.0;
+    const float min_turn_near_target_pwm = 45.0;
+    const float turn_slow_angle_deg = 15.0;
+    const float max_forward_correction = 35.0;
+    const float forward_slowdown_distance_mm = 90.0;
+    const float min_forward_approach_pwm = 100.0;
 
-    // 23/07 attempt to change jittery porblem 
+    // 23/07 attempt to change jittery porblem
     float target_wall_distance_mm = 100;
 
     // Enter the resting state within ±4 mm.
@@ -695,17 +984,30 @@ private:
     unsigned long wall_outside_band_start_ms = 0;
 
     bool lidar_centering_enabled = false;
-    float side_wall_target_mm = 45.0;
-    const float lidar_centering_kp = 0.8;
-    const float max_lidar_correction = 30.0;
-    const uint16_t min_side_wall_mm = 10;
-    const uint16_t max_side_wall_mm = 140;
+    float side_wall_target_mm = 50.0;
+    const float lidar_centering_kp = 0.55;
+    const float max_lidar_correction = 18.0;
+    const float max_lidar_correction_step = 3.0;
+    const float lidar_centering_deadband_mm = 3.0;
+    const float side_lidar_filter_alpha = 0.35;
+    const uint16_t min_side_wall_mm = 1;
+    const uint16_t max_side_wall_mm = 100;
+    float filtered_left_distance_mm = 0;
+    float filtered_right_distance_mm = 0;
+    float current_lidar_correction = 0;
+    uint8_t lidar_wall_state = 0;
+    bool left_lidar_filter_ready = false;
+    bool right_lidar_filter_ready = false;
     bool front_lidar_safety_enabled = false;
     uint16_t front_stop_distance_mm = 40;
 
     const char* command_string = nullptr;
     uint8_t command_index = 0;
+    uint8_t active_forward_command_count = 1;
     CommandState command_state = COMMAND_READY;
+    bool command_pause_active = false;
+    unsigned long command_pause_start_ms = 0;
+    const unsigned long command_pause_time_ms = 80;
     const float maze_cell_distance_mm = 180.0;
 
 };

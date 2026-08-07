@@ -46,22 +46,43 @@ public:
             sensor.setAddress(address);
         }
 
-        ready = true;
+        // The library records the status of the most recent I2C transaction.
+        ready = (sensor.last_status == 0);
     }
 
-    // Returns the measured distance in millimetres.
+    // Returns the measured distance in millimetres, or 0 when the latest
+    // measurement is invalid. Invalid samples are never replaced with an old
+    // cached distance.
     uint16_t readDistance() {
+        reading_valid = false;
+        timed_out = false;
+        range_status = INVALID_RANGE_STATUS;
+
         if (!ready) {
-            return distance;
+            distance = 0;
+            return 0;
         }
 
         uint16_t reading = sensor.readRangeSingleMillimeters();
         timed_out = sensor.timeoutOccurred();
 
-        if (!timed_out && reading > 0 && reading < max_valid_distance_mm) {
-            distance = reading;
+        if (timed_out) {
+            distance = 0;
+            return 0;
         }
 
+        range_status = sensor.readRangeStatus();
+
+        if (sensor.last_status != 0 ||
+            range_status != 0 ||
+            reading == 0 ||
+            reading > max_valid_distance_mm) {
+            distance = 0;
+            return 0;
+        }
+
+        distance = reading;
+        reading_valid = true;
         return distance;
     }
 
@@ -97,6 +118,14 @@ public:
         return timed_out;
     }
 
+    bool isReadingValid() {
+        return ready && reading_valid;
+    }
+
+    uint8_t getRangeStatus() {
+        return range_status;
+    }
+
     // For debug
     uint16_t getDistance() {
         return distance;
@@ -108,10 +137,14 @@ public:
     const uint8_t xshut_pin;
 
 private:
+    static constexpr uint8_t INVALID_RANGE_STATUS = 0xFF;
+
     VL6180X sensor;
     bool ready = false;
     bool timed_out = false;
-    uint16_t max_valid_distance_mm = 2000;
+    bool reading_valid = false;
+    uint8_t range_status = INVALID_RANGE_STATUS;
+    uint16_t max_valid_distance_mm = 200;
     uint16_t timeout_ms = 100;
     uint16_t distance = 0;
 };

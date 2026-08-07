@@ -2,6 +2,8 @@
 
 Arduino Nano starter code for the MTRN3100 micromouse project. The current code is organised around Task 3 simple driving: straight-line tracking, wall-distance stopping, turning, and chained maze commands.
 
+The repository also contains a computer-side path-planning core for Task 4.2.
+
 ## Project Files
 
 - `src/main.cpp`: Arduino entry point. Selects which task to run and creates the motors, encoders, lidar, IMU, and robot object.
@@ -11,6 +13,51 @@ Arduino Nano starter code for the MTRN3100 micromouse project. The current code 
 - `include/PIDController.hpp`: PID control helper.
 - `include/Lidar.hpp`: Front distance sensor interface.
 - `include/IMU.hpp`: Heading/yaw sensor interface.
+- `computer/task4/planner.py`: Python occupancy-grid planner for Task 4.2. It
+  performs obstacle inflation, eight-connected A* search, safe line-of-sight
+  simplification, and waypoint/motion-command generation.
+- `test/test_task4_planner.py`: Unit tests for the Task 4.2 planner.
+
+## Task 4.2 Planner
+
+The camera/CV program should threshold and calibrate its image into a 2-D binary
+mask (`0` free, non-zero occupied). Keep the outer course walls in that mask;
+pixels outside the supplied map are treated as occupied. For reasonable Python
+performance, resize the calibrated course to roughly 5--10 mm per pixel before
+planning.
+
+```python
+from computer.task4 import ContinuousPlanner, OccupancyGrid, PlannerConfig
+
+# obstacle_mask can be a 2-D NumPy/OpenCV array.
+grid = OccupancyGrid.from_rows(obstacle_mask, resolution_mm=5.0)
+planner = ContinuousPlanner(
+    PlannerConfig(
+        robot_radius_mm=50.0,  # replace with measured footprint radius
+        safety_margin_mm=10.0,
+    )
+)
+path = planner.plan(grid, start=(start_x, start_y), goal=(goal_x, goal_y))
+
+if path.succeeded:
+    # Draw path.grid_waypoints over the image for the demonstrator.
+    commands = planner.make_motion_commands(
+        path.waypoints_mm, initial_heading_deg=measured_start_heading_deg
+    )
+    # Send commands, or path.relative_waypoints_mm, over serial.
+```
+
+The planner belongs on the computer because the occupancy image and A* working
+memory are much larger than an Arduino Nano should handle. Only the resulting
+small waypoint/command list should be sent to the robot. Keep future OpenCV and
+serial-link code beside the planner under `computer/` so PlatformIO does not try
+to compile it for the Nano.
+
+Run the planner tests on a computer with:
+
+```sh
+python3 -m unittest test/test_task4_planner.py
+```
 
 ## Selecting A Task
 

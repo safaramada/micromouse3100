@@ -11,23 +11,35 @@ public:
         : kp(kp), ki(ki), kd(kd) {}
 
     float compute(float input) {
+        return computeFromError(setpoint - (input - zero_ref));
+    }
+
+    // Use this when the caller already has a signed control error. A positive
+    // error produces a positive controller output.
+    float computeFromError(float current_error) {
+        constexpr float derivative_filter_alpha = 0.25f;
+        constexpr float max_derivative_dt = 0.25f;
+        constexpr float integral_limit = 500.0f;
+
         curr_time = micros();
 
-        if (prev_time == 0) {
-            prev_time = curr_time;
-        }
-
-        dt = static_cast<float>(curr_time - prev_time) / 1e6;
+        uint32_t elapsed_us = (prev_time == 0) ? 0 : curr_time - prev_time;
+        dt = static_cast<float>(elapsed_us) / 1e6f;
         prev_time = curr_time;
 
-        if (dt <= 0) {
-            dt = 0.001;
+        error = current_error;
+
+        if (elapsed_us == 0 || dt > max_derivative_dt) {
+            dt = (elapsed_us == 0) ? 0.001f : dt;
+            derivative = 0;
+        } else {
+            float raw_derivative = (error - prev_error) / dt;
+            derivative += derivative_filter_alpha *
+                (raw_derivative - derivative);
         }
 
-        error = setpoint - (input - zero_ref);
-
         integral += error * dt;
-        derivative = (error - prev_error) / dt;
+        integral = constrain(integral, -integral_limit, integral_limit);
 
         output = kp * error + ki * integral + kd * derivative;
 
@@ -42,20 +54,25 @@ public:
         kd = d;
     }
 
+    void reset(float initial_error = 0) {
+        prev_time = micros();
+        curr_time = prev_time;
+        dt = 0;
+        error = initial_error;
+        prev_error = initial_error;
+        integral = 0;
+        derivative = 0;
+        output = 0;
+    }
+
     float getError() {
         return error;
     }
 
     void zeroAndSetTarget(float zero, float target) {
-        prev_time = micros();
         zero_ref = zero;
         setpoint = target;
-
-        error = 0;
-        prev_error = 0;
-        integral = 0;
-        derivative = 0;
-        output = 0;
+        reset();
     }
 
 public:
