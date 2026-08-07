@@ -52,7 +52,7 @@ StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
 
 // const char command_string[] = "frfrfflflff";
-const char command_string[] = "ffflfrffrffflfr";
+const char command_string[] = "rrfflffffffrflf";
 
 bool i2cDevicePresent(uint8_t address) {
     Wire.beginTransmission(address);

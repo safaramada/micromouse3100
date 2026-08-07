@@ -2,6 +2,10 @@
 
 Arduino Nano starter code for the MTRN3100 micromouse project. The current code is organised around Task 3 simple driving: straight-line tracking, wall-distance stopping, turning, and chained maze commands.
 
+# Commands for Masking 
+
+py shortest_path_cylinders.py "imageNAME.png" --start 1 --goal 79
+
 ## Project Files
 
 - `src/main.cpp`: Arduino entry point. Selects which task to run and creates the motors, encoders, lidar, IMU, and robot object.
