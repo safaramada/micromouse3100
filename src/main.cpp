@@ -52,7 +52,7 @@ StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
 
 // const char command_string[] = "frfrfflflff";
-const char command_string[] = "rflffrflf";
+const char command_string[] = "ffflfrffrffflfr";
 
 bool i2cDevicePresent(uint8_t address) {
     Wire.beginTransmission(address);
@@ -138,7 +138,7 @@ void setup() {
     // robot.startTurnHold(-90.0);
     // since its from the bottom, plus 2cm so its plus 20cm
     // robot.startWallDistance(120);   // DIRIVING AND STOPPING TASK 
-    // robot.startStraightLine(1000); // STRAIGHT LINE TRACKING TASK  
+    // robot.startStraightLine(3000); // STRAIGHT LINE TRACKING TASK  1000 to 3000
 
 }
 
