@@ -144,5 +144,27 @@ void setup() {
 
 void loop() {
     robot.update();
+
+    // Print estimator telemetry at 10 Hz so the EKF can be validated without
+    // flooding the serial connection or delaying the control loop too much.
+    static unsigned long lastEkfTelemetryMs = 0;
+    const unsigned long nowMs = millis();
+    if (nowMs - lastEkfTelemetryMs >= 100) {
+        lastEkfTelemetryMs = nowMs;
+
+        Serial.print(F("LEFT_COUNT:"));
+        Serial.print(leftEncoder.getCount());
+        Serial.print(F(",RIGHT_COUNT:"));
+        Serial.print(rightEncoder.getCount());
+        Serial.print(F(",IMU_YAW:"));
+        Serial.print(imu.getYawDeg());
+        Serial.print(F(",EKF_X:"));
+        Serial.print(robot.getPoseXMM());
+        Serial.print(F(",EKF_Y:"));
+        Serial.print(robot.getPoseYMM());
+        Serial.print(F(",EKF_HEADING:"));
+        Serial.println(robot.getHeadingDeg());
+    }
+
     delay(10);
 }
