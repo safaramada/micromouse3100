@@ -7,6 +7,7 @@
 #include "IMU.hpp"
 #include "Lidar.hpp"
 #include "Robot.hpp"
+#include "EKFTesting.hpp"
 #include "StraightLineTracking.hpp"
 #include "Turning.hpp"
 
@@ -50,6 +51,13 @@ Robot robot(
 
 StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
+EKFTesting ekfTesting(robot);
+
+// enable only one line to test.
+// three false for the normal maze command-string program.
+constexpr bool RUN_EKF_STATIONARY_DRIFT_TEST = false;
+constexpr bool RUN_EKF_STRAIGHT_GAP_TEST = false;
+constexpr bool RUN_EKF_TURN_RETURN_TEST = false;
 
 const char command_string[] = "fffffrflfrfrflflfrfrflfrffff";
 // const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
@@ -128,13 +136,19 @@ void setup() {
 
     delay(1000);
 
-    // Use both side LiDARs to keep about 50 mm from the maze walls.
-    robot.enableLidarCentering(true, 50.0);
-
-    // Start the next turn if the front wall is closer than 50 mm.
-    robot.enableFrontLidarSafety(true, 50);
-
-    robot.startCommandString(command_string, 130);
+    if (RUN_EKF_STATIONARY_DRIFT_TEST) {
+        ekfTesting.startStationaryDriftTest();
+    } else if (RUN_EKF_STRAIGHT_GAP_TEST) {
+        ekfTesting.startStraightGapTest();
+    } else if (RUN_EKF_TURN_RETURN_TEST) {
+        ekfTesting.startTurnReturnTest();
+    } else {
+        // Normal maze mode: use both side LiDARs to stay centred and start the
+        // next turn if a front wall is closer than 50 mm.
+        robot.enableLidarCentering(true, 50.0);
+        robot.enableFrontLidarSafety(true, 50);
+        robot.startCommandString(command_string, 130);
+    }
     // robot.startTurnHold(-90.0);
     // since its from the bottom, plus 2cm so its plus 20cm
     // robot.startWallDistance(120);   // DIRIVING AND STOPPING TASK 
@@ -144,9 +158,8 @@ void setup() {
 
 void loop() {
     robot.update();
+    ekfTesting.update();
 
-    // Print estimator telemetry at 10 Hz so the EKF can be validated without
-    // flooding the serial connection or delaying the control loop too much.
     static unsigned long lastEkfTelemetryMs = 0;
     const unsigned long nowMs = millis();
     if (nowMs - lastEkfTelemetryMs >= 100) {
