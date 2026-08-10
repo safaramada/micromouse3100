@@ -24,10 +24,11 @@ public:
         Serial.println(F("EKF_TEST:STATIONARY_DRIFT,STATUS:STARTED"));
     }
 
-    void startStraightGapTest(float distance_mm = 720.0f,
+    void startStraightGapTest(float distance_mm = 1000.0f,
                               int16_t pwm = 110) {
         beginTest(TEST_STRAIGHT_GAP);
-        robot.enableLidarCentering(true, 50.0f);
+        // Isolate the EKF/IMU heading test from side-wall corrections.
+        robot.enableLidarCentering(false);
         robot.enableFrontLidarSafety(false);
         robot.startStraightLine(distance_mm, pwm);
         Serial.print(F("EKF_TEST:STRAIGHT_GAP,STATUS:STARTED,DISTANCE_MM:"));

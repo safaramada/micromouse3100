@@ -106,7 +106,7 @@ public:
         start_left_rotation = left_encoder.getRotation();
         start_right_rotation = right_encoder.getRotation();
 
-        target_yaw_deg = getHeadingDeg();
+        target_yaw_deg = getControlHeadingDeg();
         heading_pid.reset();
         resetLidarCenteringState();
 
@@ -119,7 +119,7 @@ public:
         finished = false;
 
         target_wall_distance_mm = front_distance_mm;
-        target_yaw_deg = getHeadingDeg();
+        target_yaw_deg = getControlHeadingDeg();
 
         distance_pid.reset();
         heading_pid.reset();
@@ -140,7 +140,9 @@ public:
         task = TASK_TURN;
         finished = false;
         turn_hold_enabled = false;
-        target_yaw_deg = IMU::wrapAngleDeg(getHeadingDeg() + angle_deg);
+        target_yaw_deg = IMU::wrapAngleDeg(
+            getControlHeadingDeg() + angle_deg
+        );
         beginTurnController();
     }
 
@@ -175,7 +177,9 @@ public:
         turn_hold_enabled = true;
 
         // Save this once. Do not recalculate it after the robot is disturbed.
-        target_yaw_deg = IMU::wrapAngleDeg(getHeadingDeg() + angle_deg);
+        target_yaw_deg = IMU::wrapAngleDeg(
+            getControlHeadingDeg() + angle_deg
+        );
 
         beginTurnController();
 
@@ -235,6 +239,14 @@ public:
     }
 
 private:
+    // Keep the motor-control loop tied to the direct IMU measurement. The EKF
+    // heading also contains wheel-odometry prediction, so feeding it back into
+    // wheel control can amplify encoder or wheel-radius mismatch. The EKF is
+    // still updated continuously and remains the published pose estimate.
+    float getControlHeadingDeg() {
+        return imu.getYawDeg();
+    }
+
     void updateStraightLine() {
         float distance_mm = getAverageDistanceMM();
 
@@ -243,17 +255,19 @@ private:
             return;
         }
 
-        float current_yaw = getHeadingDeg();
+        float current_yaw = getControlHeadingDeg();
 
         // Positive if robot has rotated away from starting heading
         float heading_error = IMU::wrapAngleDeg(current_yaw - target_yaw_deg);
 
         float imu_correction = heading_pid.computeFromError(heading_error);
+        float encoder_correction = getEncoderBalanceCorrection();
         float lidar_correction = getLidarCenteringCorrection();
 
         // Speed up the wheel nearest a wall and slow the opposite wheel,
         // steering the robot away from that wall.
-        float correction = imu_correction + lidar_correction;
+        float correction =
+            imu_correction + encoder_correction + lidar_correction;
 
         correction = constrain(
             correction,
@@ -266,16 +280,22 @@ private:
 
         setDrivePWM(left_pwm, right_pwm);
 
-        Serial.print("Yaw: ");
-        Serial.print(current_yaw);
-        Serial.print(" Error: ");
-        Serial.print(heading_error);
-        Serial.print(" Distance: ");
-        Serial.print(distance_mm);
-        Serial.print(" L_PWM: ");
-        Serial.print(left_pwm);
-        Serial.print(" R_PWM: ");
-        Serial.println(right_pwm);
+        const unsigned long now_ms = millis();
+        if (now_ms - last_straight_telemetry_ms >= 500UL) {
+            last_straight_telemetry_ms = now_ms;
+            Serial.print("Yaw: ");
+            Serial.print(current_yaw);
+            Serial.print(" Error: ");
+            Serial.print(heading_error);
+            Serial.print(" Enc_Corr: ");
+            Serial.print(encoder_correction);
+            Serial.print(" Distance: ");
+            Serial.print(distance_mm);
+            Serial.print(" L_PWM: ");
+            Serial.print(left_pwm);
+            Serial.print(" R_PWM: ");
+            Serial.println(right_pwm);
+        }
     }
 
     void updateWallDistance() {
@@ -362,7 +382,7 @@ private:
         }
 
         // Heading correction to keep the robot straight.
-        float current_yaw = getHeadingDeg();
+        float current_yaw = getControlHeadingDeg();
 
         float heading_error =
             IMU::wrapAngleDeg(current_yaw - target_yaw_deg);
@@ -399,7 +419,7 @@ private:
     }
 
     void updateTurn() {
-        float current_yaw = getHeadingDeg();
+        float current_yaw = getControlHeadingDeg();
 
         float yaw_error = IMU::wrapAngleDeg(target_yaw_deg - current_yaw);
 
@@ -498,7 +518,7 @@ private:
 
             target_distance_mm =
                 maze_cell_distance_mm * active_forward_command_count;
-            target_yaw_deg = getHeadingDeg();
+            target_yaw_deg = getControlHeadingDeg();
 
             heading_pid.reset();
             resetLidarCenteringState();
@@ -507,7 +527,7 @@ private:
 
         else if (command == 'l' || command == 'L') {
             target_yaw_deg =
-                IMU::wrapAngleDeg(getHeadingDeg() + 90.0);
+                IMU::wrapAngleDeg(getControlHeadingDeg() + 90.0);
 
             beginTurnController();
             command_state = COMMAND_TURN;
@@ -515,7 +535,7 @@ private:
 
         else if (command == 'r' || command == 'R') {
             target_yaw_deg =
-                IMU::wrapAngleDeg(getHeadingDeg() - 90.0);
+                IMU::wrapAngleDeg(getControlHeadingDeg() - 90.0);
 
             beginTurnController();
             command_state = COMMAND_TURN;
@@ -580,7 +600,7 @@ private:
 
         updateStateEstimate();
         float heading_error =
-            IMU::wrapAngleDeg(getHeadingDeg() - target_yaw_deg);
+            IMU::wrapAngleDeg(getControlHeadingDeg() - target_yaw_deg);
 
         float imu_correction = heading_pid.computeFromError(heading_error);
 
@@ -725,7 +745,7 @@ private:
 
     void updateTurnCommand() {
         float yaw_error =
-            IMU::wrapAngleDeg(target_yaw_deg - getHeadingDeg());
+            IMU::wrapAngleDeg(target_yaw_deg - getControlHeadingDeg());
 
         if (fabs(yaw_error) <= turn_tolerance_deg) {
             stopMotors();
@@ -763,7 +783,7 @@ private:
 
     void beginTurnController() {
         float initial_error =
-            IMU::wrapAngleDeg(target_yaw_deg - getHeadingDeg());
+            IMU::wrapAngleDeg(target_yaw_deg - getControlHeadingDeg());
 
         turn_pid.reset(initial_error);
         turn_settle_start_ms = 0;
@@ -824,6 +844,24 @@ private:
         float average_rotation = (fabs(left_rotation) + fabs(right_rotation)) / 2.0;
 
         return average_rotation * wheel_radius_mm;
+    }
+
+    float getEncoderBalanceCorrection() {
+        const float left_distance_mm = fabs(
+            left_encoder.getRotation() - start_left_rotation
+        ) * wheel_radius_mm;
+        const float right_distance_mm = fabs(
+            right_encoder.getRotation() - start_right_rotation
+        ) * wheel_radius_mm;
+
+        // Positive correction speeds up the left wheel and slows the right.
+        // Therefore, if the left wheel has travelled farther, the correction
+        // is negative and gently lets the right wheel catch up.
+        return constrain(
+            encoder_balance_kp * (right_distance_mm - left_distance_mm),
+            -max_encoder_balance_correction,
+            max_encoder_balance_correction
+        );
     }
 
     void initialiseStateEstimator() {
@@ -963,8 +1001,11 @@ private:
     const float min_turn_near_target_pwm = 45.0;
     const float turn_slow_angle_deg = 15.0;
     const float max_forward_correction = 35.0;
+    const float encoder_balance_kp = 0.35f;
+    const float max_encoder_balance_correction = 12.0f;
     const float forward_slowdown_distance_mm = 90.0;
     const float min_forward_approach_pwm = 100.0;
+    unsigned long last_straight_telemetry_ms = 0;
 
     // 23/07 attempt to change jittery porblem
     float target_wall_distance_mm = 100;

@@ -56,7 +56,7 @@ EKFTesting ekfTesting(robot);
 // enable only one line to test.
 // three false for the normal maze command-string program.
 constexpr bool RUN_EKF_STATIONARY_DRIFT_TEST = false;
-constexpr bool RUN_EKF_STRAIGHT_GAP_TEST = false;
+constexpr bool RUN_EKF_STRAIGHT_GAP_TEST = true;
 constexpr bool RUN_EKF_TURN_RETURN_TEST = false;
 
 const char command_string[] = "fffffrflfrfrflflfrfrflfrffff";
@@ -162,7 +162,7 @@ void loop() {
 
     static unsigned long lastEkfTelemetryMs = 0;
     const unsigned long nowMs = millis();
-    if (nowMs - lastEkfTelemetryMs >= 100) {
+    if (nowMs - lastEkfTelemetryMs >= 500) {
         lastEkfTelemetryMs = nowMs;
 
         Serial.print(F("LEFT_COUNT:"));
