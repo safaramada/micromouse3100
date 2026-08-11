@@ -603,9 +603,10 @@ private:
             IMU::wrapAngleDeg(getControlHeadingDeg() - target_yaw_deg);
 
         float imu_correction = heading_pid.computeFromError(heading_error);
+        float encoder_correction = getEncoderBalanceCorrection();
 
         float correction =
-            imu_correction + lidar_correction;
+            imu_correction + encoder_correction + lidar_correction;
 
         correction = constrain(
             correction,
@@ -675,9 +676,9 @@ private:
 
         if (left_wall && right_wall) {
             wall_error_mm = right_distance_mm - left_distance_mm;
-        } else if (left_wall) {
+        } else if (left_wall && left_distance_mm < side_wall_target_mm) {
             wall_error_mm = side_wall_target_mm - left_distance_mm;
-        } else if (right_wall) {
+        } else if (right_wall && right_distance_mm < side_wall_target_mm) {
             wall_error_mm = right_distance_mm - side_wall_target_mm;
         }
 
@@ -1001,7 +1002,7 @@ private:
     const float min_turn_near_target_pwm = 45.0;
     const float turn_slow_angle_deg = 15.0;
     const float max_forward_correction = 35.0;
-    const float encoder_balance_kp = 0.35f;
+    const float encoder_balance_kp = 0.3f;
     const float max_encoder_balance_correction = 12.0f;
     const float forward_slowdown_distance_mm = 90.0;
     const float min_forward_approach_pwm = 100.0;
@@ -1026,9 +1027,9 @@ private:
 
     bool lidar_centering_enabled = false;
     float side_wall_target_mm = 50.0;
-    const float lidar_centering_kp = 0.55;
-    const float max_lidar_correction = 18.0;
-    const float max_lidar_correction_step = 3.0;
+    const float lidar_centering_kp = 0.25f;
+    const float max_lidar_correction = 8.0f;
+    const float max_lidar_correction_step = 1.5f;
     const float lidar_centering_deadband_mm = 3.0;
     const float side_lidar_filter_alpha = 0.35;
     const uint16_t min_side_wall_mm = 1;

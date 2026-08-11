@@ -56,10 +56,10 @@ EKFTesting ekfTesting(robot);
 // enable only one line to test.
 // three false for the normal maze command-string program.
 constexpr bool RUN_EKF_STATIONARY_DRIFT_TEST = false;
-constexpr bool RUN_EKF_STRAIGHT_GAP_TEST = true;
+constexpr bool RUN_EKF_STRAIGHT_GAP_TEST = false;
 constexpr bool RUN_EKF_TURN_RETURN_TEST = false;
 
-const char command_string[] = "fffffrflfrfrflflfrfrflfrffff";
+const char command_string[] = "ffffrflfrflfrfrflflfrffrflfrffflfrfrflfrflffrffffr";
 // const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
 
 bool i2cDevicePresent(uint8_t address) {
