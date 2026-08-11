@@ -7,7 +7,6 @@
 #include "IMU.hpp"
 #include "Lidar.hpp"
 #include "Robot.hpp"
-#include "EKFTesting.hpp"
 #include "StraightLineTracking.hpp"
 #include "Turning.hpp"
 
@@ -51,16 +50,11 @@ Robot robot(
 
 StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
-EKFTesting ekfTesting(robot);
 
-// enable only one line to test.
-// three false for the normal maze command-string program.
-constexpr bool RUN_EKF_STATIONARY_DRIFT_TEST = false;
-constexpr bool RUN_EKF_STRAIGHT_GAP_TEST = false;
-constexpr bool RUN_EKF_TURN_RETURN_TEST = false;
+// const char command_string[] = "frfrfflflff";
+// const char command_string[] = "ffflfrffrffflfr";
+const char command_string[] = "ffffffffrrfffffff";
 
-const char command_string[] = "ffffrflfrflfrfrflflfrffrflfrffflfrfrflfrflffrffffr";
-// const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
 
 bool i2cDevicePresent(uint8_t address) {
     Wire.beginTransmission(address);
@@ -136,48 +130,21 @@ void setup() {
 
     delay(1000);
 
-    if (RUN_EKF_STATIONARY_DRIFT_TEST) {
-        ekfTesting.startStationaryDriftTest();
-    } else if (RUN_EKF_STRAIGHT_GAP_TEST) {
-        ekfTesting.startStraightGapTest();
-    } else if (RUN_EKF_TURN_RETURN_TEST) {
-        ekfTesting.startTurnReturnTest();
-    } else {
-        // Normal maze mode: use both side LiDARs to stay centred and start the
-        // next turn if a front wall is closer than 50 mm.
-        robot.enableLidarCentering(true, 50.0);
-        robot.enableFrontLidarSafety(true, 50);
-        robot.startCommandString(command_string, 130);
-    }
+    // Use the side LiDARs to help keep the robot centred
+    // robot.enableLidarCentering(true);
+
+    // // Stop if the front wall is closer than 40 mm
+    // robot.enableFrontLidarSafety(true, 40);
+
+    robot.startCommandString(command_string);
     // robot.startTurnHold(-90.0);
     // since its from the bottom, plus 2cm so its plus 20cm
     // robot.startWallDistance(120);   // DIRIVING AND STOPPING TASK 
-    // robot.startStraightLine(3000, 130); // STRAIGHT LINE TRACKING TASK
+    // robot.startStraightLine(3000); // STRAIGHT LINE TRACKING TASK  1000 to 3000
 
 }
 
 void loop() {
     robot.update();
-    ekfTesting.update();
-
-    static unsigned long lastEkfTelemetryMs = 0;
-    const unsigned long nowMs = millis();
-    if (nowMs - lastEkfTelemetryMs >= 500) {
-        lastEkfTelemetryMs = nowMs;
-
-        Serial.print(F("LEFT_COUNT:"));
-        Serial.print(leftEncoder.getCount());
-        Serial.print(F(",RIGHT_COUNT:"));
-        Serial.print(rightEncoder.getCount());
-        Serial.print(F(",IMU_YAW:"));
-        Serial.print(imu.getYawDeg());
-        Serial.print(F(",EKF_X:"));
-        Serial.print(robot.getPoseXMM());
-        Serial.print(F(",EKF_Y:"));
-        Serial.print(robot.getPoseYMM());
-        Serial.print(F(",EKF_HEADING:"));
-        Serial.println(robot.getHeadingDeg());
-    }
-
     delay(10);
 }
