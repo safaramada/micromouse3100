@@ -7,8 +7,8 @@
 #include "IMU.hpp"
 #include "Lidar.hpp"
 #include "Robot.hpp"
-#include "StraightLineTracking.hpp"
-#include "Turning.hpp"
+// #include "StraightLineTracking.hpp"
+// #include "Turning.hpp"
 
 
 using namespace mtrn3100;
@@ -48,11 +48,16 @@ Robot robot(
     80.0   // wheel base in mm
 );
 
-StraightLineTracking straightLineTask(robot);
-Turning turningTask(robot);
+// StraightLineTracking straightLineTask(robot);
+// Turning turningTask(robot);
 
-const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
+// const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
 // const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
+
+const char command_string[] =
+    "ffff,"
+    "[(45,150),(-90,150),(90,150),(-90,150),(45,150)],"
+    "fff";
 
 bool i2cDevicePresent(uint8_t address) {
     Wire.beginTransmission(address);

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <math.h>
+#include <stdlib.h>
 
 #include "Encoder.hpp"
 #include "IMU.hpp"
@@ -23,7 +24,9 @@ enum RobotTask {
 enum CommandState {
     COMMAND_READY,
     COMMAND_FORWARD,
-    COMMAND_TURN
+    COMMAND_TURN,
+    COMMAND_CUSTOM_TURN,
+    COMMAND_CUSTOM_FORWARD
 };
 
 // The robot class combines the low-level hardware classes into Task 3 actions.
@@ -94,53 +97,53 @@ public:
     }
 
 
-    void startStraightLine(float distance_mm, int16_t pwm = 130) {
-        task = TASK_STRAIGHT_LINE;
-        finished = false;
+    // void startStraightLine(float distance_mm, int16_t pwm = 130) {
+    //     task = TASK_STRAIGHT_LINE;
+    //     finished = false;
 
-        target_distance_mm = distance_mm;
-        base_pwm = constrain(abs(pwm), 80, 180);
+    //     target_distance_mm = distance_mm;
+    //     base_pwm = constrain(abs(pwm), 80, 180);
 
-        start_left_rotation = left_encoder.getRotation();
-        start_right_rotation = right_encoder.getRotation();
+    //     start_left_rotation = left_encoder.getRotation();
+    //     start_right_rotation = right_encoder.getRotation();
 
-        target_yaw_deg = imu.getYawDeg();
-        heading_pid.reset();
-        resetSideLidarAvoidanceState();
+    //     target_yaw_deg = imu.getYawDeg();
+    //     heading_pid.reset();
+    //     resetSideLidarAvoidanceState();
 
-        Serial.print("Straight line target yaw: ");
-        Serial.println(target_yaw_deg);
-    }
+    //     Serial.print("Straight line target yaw: ");
+    //     Serial.println(target_yaw_deg);
+    // }
 
-    void startWallDistance(float front_distance_mm = 100.0f) {
-        task = TASK_WALL_DISTANCE;
-        finished = false;
+    // void startWallDistance(float front_distance_mm = 100.0f) {
+    //     task = TASK_WALL_DISTANCE;
+    //     finished = false;
 
-        target_wall_distance_mm = front_distance_mm;
-        target_yaw_deg = imu.getYawDeg();
+    //     target_wall_distance_mm = front_distance_mm;
+    //     target_yaw_deg = imu.getYawDeg();
 
-        distance_pid.reset();
-        heading_pid.reset();
+    //     distance_pid.reset();
+    //     heading_pid.reset();
 
-        // Reset wall-distance controller state.
-        wall_holding_position = false;
-        wall_outside_band_start_ms = 0;
+    //     // Reset wall-distance controller state.
+    //     wall_holding_position = false;
+    //     wall_outside_band_start_ms = 0;
 
-        Serial.print("Wall distance target: ");
-        Serial.print(target_wall_distance_mm);
-        Serial.println(" mm");
+    //     Serial.print("Wall distance target: ");
+    //     Serial.print(target_wall_distance_mm);
+    //     Serial.println(" mm");
 
-        Serial.print("Wall distance target yaw: ");
-        Serial.println(target_yaw_deg);
-    }
+    //     Serial.print("Wall distance target yaw: ");
+    //     Serial.println(target_yaw_deg);
+    // }
 
-    void startTurn(float angle_deg) {
-        task = TASK_TURN;
-        finished = false;
-        turn_hold_enabled = false;
-        target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
-        beginTurnController();
-    }
+    // void startTurn(float angle_deg) {
+    //     task = TASK_TURN;
+    //     finished = false;
+    //     turn_hold_enabled = false;
+    //     target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
+    //     beginTurnController();
+    // }
 
     void startCommandString(const char commands[], int16_t pwm = 130) {
         task = TASK_COMMAND_STRING;
@@ -456,6 +459,16 @@ private:
 
         if (command_state == COMMAND_TURN) {
             updateTurnCommand();
+            return;
+        }
+
+        if (command_state == COMMAND_CUSTOM_TURN) {
+            updateCustomTurn();
+            return;
+        }
+
+        if (command_state == COMMAND_CUSTOM_FORWARD) {
+            updateCustomForward();
         }
     }
 
@@ -505,11 +518,206 @@ private:
             beginTurnController();
             command_state = COMMAND_TURN;
         }
+        else if (command == '(') {
+            parseCustomCommand();
+        }
         else {
 
             command_index++;
 
         }
+
+    }
+
+    void parseCustomCommand() {
+        // Format: (angle_deg,distance_mm). Positive angles turn left and
+        // negative angles turn right, matching the existing L/R commands.
+        const char* angle_start = command_string + command_index + 1;
+        char* angle_end = nullptr;
+        double parsed_angle = strtod(angle_start, &angle_end);
+
+        if (angle_end == angle_start || !isfinite(parsed_angle)) {
+            Serial.println(F("Invalid custom command: invalid angle"));
+            finishTask();
+            return;
+        }
+
+        while (*angle_end == ' ' || *angle_end == '\t') {
+            angle_end++;
+        }
+
+        if (*angle_end != ',') {
+            Serial.println(F("Invalid custom command: missing comma"));
+            finishTask();
+            return;
+        }
+
+        const char* distance_start = angle_end + 1;
+        char* distance_end = nullptr;
+        double parsed_distance = strtod(distance_start, &distance_end);
+
+        if (distance_end == distance_start || !isfinite(parsed_distance)) {
+            Serial.println(F("Invalid custom command: invalid distance"));
+            finishTask();
+            return;
+        }
+
+        while (*distance_end == ' ' || *distance_end == '\t') {
+            distance_end++;
+        }
+
+        if (*distance_end != ')') {
+            Serial.println(F("Invalid custom command: missing closing )"));
+            finishTask();
+            return;
+        }
+
+        if (parsed_angle < -180.0 || parsed_angle > 180.0) {
+            Serial.println(F("Invalid custom command: angle must be -180 to 180"));
+            finishTask();
+            return;
+        }
+
+        if (parsed_distance < 0.0) {
+            Serial.println(F("Invalid custom command: distance must be non-negative"));
+            finishTask();
+            return;
+        }
+
+        custom_angle_deg = static_cast<float>(parsed_angle);
+        custom_distance_mm = static_cast<float>(parsed_distance);
+        custom_command_end_index = static_cast<uint16_t>(
+            distance_end - command_string + 1
+        );
+
+        Serial.print(F("Custom command: turn "));
+        Serial.print(custom_angle_deg);
+        Serial.print(F(" deg, drive "));
+        Serial.print(custom_distance_mm);
+        Serial.println(F(" mm"));
+
+        if (fabs(custom_angle_deg) > custom_angle_tolerance_deg) {
+            target_yaw_deg = IMU::wrapAngleDeg(
+                imu.getYawDeg() + custom_angle_deg
+            );
+
+            beginTurnController();
+            command_state = COMMAND_CUSTOM_TURN;
+            return;
+        }
+
+        if (custom_distance_mm > 0.0f) {
+            startCustomForward();
+            return;
+        }
+
+        completeCustomCommand();
+    }
+
+    void startCustomForward() {
+        start_left_rotation = left_encoder.getRotation();
+        start_right_rotation = right_encoder.getRotation();
+
+        target_distance_mm = custom_distance_mm;
+        target_yaw_deg = imu.getYawDeg();
+
+        heading_pid.reset();
+        resetSideLidarAvoidanceState();
+        command_state = COMMAND_CUSTOM_FORWARD;
+    }
+
+    void updateCustomTurn() {
+        float yaw_error =
+            IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
+
+        if (fabs(yaw_error) <= turn_tolerance_deg) {
+            stopMotors();
+
+            if (turn_settle_start_ms == 0) {
+                turn_settle_start_ms = millis();
+            }
+
+            if (millis() - turn_settle_start_ms >= turn_settle_time_ms) {
+                turn_settle_start_ms = 0;
+
+                if (custom_distance_mm > 0.0f) {
+                    startCustomForward();
+                } else {
+                    completeCustomCommand();
+                }
+            }
+
+            return;
+        }
+
+        turn_settle_start_ms = 0;
+        float pwm = getTurnPWM(yaw_error);
+        setDrivePWM(-pwm, pwm);
+    }
+
+    void updateCustomForward() {
+        float distance_mm = getAverageDistanceMM();
+
+        if (finishCustomForwardIfNeeded(distance_mm)) {
+            return;
+        }
+
+        if (front_lidar_safety_enabled) {
+            uint16_t front_distance_mm = front_lidar.readDistance();
+
+            if (front_lidar.isReadingValid() &&
+                front_distance_mm <= front_stop_distance_mm) {
+                Serial.println(F("Emergency stop during custom forward"));
+                finishTask();
+                return;
+            }
+
+            // The LiDAR call blocks, so check the encoders again before
+            // issuing another motor command.
+            distance_mm = getAverageDistanceMM();
+            if (finishCustomForwardIfNeeded(distance_mm)) {
+                return;
+            }
+        }
+
+        float lidar_correction = getSideLidarAvoidanceCorrection();
+
+        distance_mm = getAverageDistanceMM();
+        if (finishCustomForwardIfNeeded(distance_mm)) {
+            return;
+        }
+
+        imu.update();
+        float heading_error =
+            IMU::wrapAngleDeg(imu.getYawDeg() - target_yaw_deg);
+        float imu_correction = heading_pid.computeFromError(heading_error);
+
+        float correction = constrain(
+            imu_correction + lidar_correction,
+            -max_forward_correction,
+            max_forward_correction
+        );
+
+        float forward_pwm = getForwardApproachPWM(distance_mm);
+        float left_pwm = constrain(forward_pwm + correction, 80, 180);
+        float right_pwm = constrain(forward_pwm - correction, 80, 180);
+
+        setDrivePWM(left_pwm, right_pwm);
+    }
+
+    bool finishCustomForwardIfNeeded(float distance_mm) {
+        if (distance_mm < target_distance_mm) {
+            return false;
+        }
+
+        completeCustomCommand();
+        return true;
+    }
+
+    void completeCustomCommand() {
+        stopMotors();
+        command_index = custom_command_end_index;
+        command_state = COMMAND_READY;
 
     }
 
@@ -774,7 +982,7 @@ private:
             (base_pwm - min_forward_approach_pwm) * slowdown_ratio;
     }
 
-    void completeCurrentCommand(uint8_t command_count = 1) {
+    void completeCurrentCommand(uint16_t command_count = 1) {
         stopMotors();
 
         command_index += command_count;
@@ -890,9 +1098,13 @@ private:
     uint16_t front_stop_distance_mm = 40;
 
     const char* command_string = nullptr;
-    uint8_t command_index = 0;
-    uint8_t active_forward_command_count = 1;
+    uint16_t command_index = 0;
+    uint16_t active_forward_command_count = 1;
     CommandState command_state = COMMAND_READY;
+    float custom_angle_deg = 0.0f;
+    float custom_distance_mm = 0.0f;
+    uint16_t custom_command_end_index = 0;
+    const float custom_angle_tolerance_deg = 0.1f;
     bool command_pause_active = false;
     unsigned long command_pause_start_ms = 0;
     const unsigned long command_pause_time_ms = 80;
