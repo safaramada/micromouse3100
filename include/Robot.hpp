@@ -106,7 +106,7 @@ public:
 
         target_yaw_deg = imu.getYawDeg();
         heading_pid.reset();
-        resetLidarCenteringState();
+        resetSideLidarAvoidanceState();
 
         Serial.print("Straight line target yaw: ");
         Serial.println(target_yaw_deg);
@@ -153,13 +153,14 @@ public:
         base_pwm = constrain(abs(pwm), 80, 180);
 
         stopMotors();
-        resetLidarCenteringState();
+        resetSideLidarAvoidanceState();
     }
 
-    void enableLidarCentering(bool enabled, float target_side_distance_mm = 50.0) {
-        lidar_centering_enabled = enabled;
-        side_wall_target_mm = target_side_distance_mm;
-        resetLidarCenteringState();
+    void enableSideLidarAvoidance(bool enabled,
+                                  float minimum_clearance_mm = 50.0f) {
+        side_lidar_avoidance_enabled = enabled;
+        side_clearance_mm = minimum_clearance_mm;
+        resetSideLidarAvoidanceState();
     }
 
     void enableFrontLidarSafety(bool enabled, uint16_t stop_distance_mm = 40) {
@@ -233,10 +234,10 @@ private:
         float heading_error = IMU::wrapAngleDeg(current_yaw - target_yaw_deg);
 
         float imu_correction = heading_pid.computeFromError(heading_error);
-        float lidar_correction = getLidarCenteringCorrection();
+        float lidar_correction = getSideLidarAvoidanceCorrection();
 
-        // Speed up the wheel nearest a wall and slow the opposite wheel,
-        // steering the robot away from that wall.
+        // If a side wall is too close, speed up the wheel nearest that wall
+        // and slow the opposite wheel to steer away from it.
         float correction = imu_correction + lidar_correction;
 
         correction = constrain(
@@ -485,7 +486,7 @@ private:
             target_yaw_deg = imu.getYawDeg();
 
             heading_pid.reset();
-            resetLidarCenteringState();
+            resetSideLidarAvoidanceState();
             command_state = COMMAND_FORWARD;
         }
 
@@ -553,7 +554,7 @@ private:
             return;
         }
 
-        float lidar_correction = getLidarCenteringCorrection();
+        float lidar_correction = getSideLidarAvoidanceCorrection();
 
         // Side LiDAR calls also block. Do not issue another forward command if
         // the encoder target was crossed while waiting for them.
@@ -584,9 +585,9 @@ private:
         setDrivePWM(left_pwm, right_pwm);
     }
 
-    float getLidarCenteringCorrection() {
-        if (!lidar_centering_enabled) {
-            resetLidarCenteringState();
+    float getSideLidarAvoidanceCorrection() {
+        if (!side_lidar_avoidance_enabled) {
+            resetSideLidarAvoidanceState();
             return 0;
         }
 
@@ -619,51 +620,36 @@ private:
             right_lidar_filter_ready = false;
         }
 
-        uint8_t wall_state =
-            (left_wall ? 0x01 : 0x00) |
-            (right_wall ? 0x02 : 0x00);
+        // A side contributes only when it is inside the minimum-clearance
+        // zone. At safe distances the side LiDARs do not influence steering.
+        float left_intrusion_mm = left_wall
+            ? max(0.0f, side_clearance_mm - left_distance_mm)
+            : 0.0f;
+        float right_intrusion_mm = right_wall
+            ? max(0.0f, side_clearance_mm - right_distance_mm)
+            : 0.0f;
 
-        if (wall_state == 0) {
-            resetLidarCenteringState();
-            return 0;
-        }
+        // Positive correction steers away from the left wall; negative
+        // correction steers away from the right. If both sides are close,
+        // steer toward whichever side has more clearance.
+        float avoidance_error_mm = left_intrusion_mm - right_intrusion_mm;
 
-        // A corner changes which walls are visible. Start the new correction
-        // from zero instead of blending it with the previous corridor.
-        if (wall_state != lidar_wall_state) {
-            lidar_wall_state = wall_state;
-            current_lidar_correction = 0;
-        }
-
-        float wall_error_mm = 0;
-
-        if (left_wall && right_wall) {
-            wall_error_mm = right_distance_mm - left_distance_mm;
-        } else if (left_wall) {
-            wall_error_mm = side_wall_target_mm - left_distance_mm;
-        } else if (right_wall) {
-            wall_error_mm = right_distance_mm - side_wall_target_mm;
-        }
-
-        // Ignore small differences caused by normal sensor noise. Removing the
-        // deadband from larger errors keeps the correction continuous.
-        if (fabs(wall_error_mm) <= lidar_centering_deadband_mm) {
-            wall_error_mm = 0;
+        // Ignore very small intrusions caused by normal sensor noise.
+        if (fabs(avoidance_error_mm) <= side_avoidance_deadband_mm) {
+            avoidance_error_mm = 0;
+        } else if (avoidance_error_mm > 0) {
+            avoidance_error_mm -= side_avoidance_deadband_mm;
         } else {
-            if (wall_error_mm > 0) {
-                wall_error_mm -= lidar_centering_deadband_mm;
-            } else {
-                wall_error_mm += lidar_centering_deadband_mm;
-            }
+            avoidance_error_mm += side_avoidance_deadband_mm;
         }
 
         float target_correction = constrain(
-            lidar_centering_kp * wall_error_mm,
-            -max_lidar_correction,
-            max_lidar_correction
+            side_avoidance_kp * avoidance_error_mm,
+            -max_side_avoidance_correction,
+            max_side_avoidance_correction
         );
 
-        return slewLidarCorrection(target_correction);
+        return slewSideLidarAvoidanceCorrection(target_correction);
     }
 
     bool isValidSideWall(Lidar& lidar, uint16_t distance_mm) {
@@ -678,6 +664,10 @@ private:
         if (!filter_ready) {
             filtered_distance_mm = static_cast<float>(reading_mm);
             filter_ready = true;
+        } else if (reading_mm < filtered_distance_mm) {
+            // React immediately when clearance is shrinking. Only smooth the
+            // release so avoidance is not delayed as the robot nears a wall.
+            filtered_distance_mm = static_cast<float>(reading_mm);
         } else {
             filtered_distance_mm += side_lidar_filter_alpha *
                 (static_cast<float>(reading_mm) - filtered_distance_mm);
@@ -686,25 +676,24 @@ private:
         return filtered_distance_mm;
     }
 
-    float slewLidarCorrection(float target_correction) {
-        float change = target_correction - current_lidar_correction;
+    float slewSideLidarAvoidanceCorrection(float target_correction) {
+        float change = target_correction - current_side_avoidance_correction;
         change = constrain(
             change,
-            -max_lidar_correction_step,
-            max_lidar_correction_step
+            -max_side_avoidance_step,
+            max_side_avoidance_step
         );
 
-        current_lidar_correction += change;
-        return current_lidar_correction;
+        current_side_avoidance_correction += change;
+        return current_side_avoidance_correction;
     }
 
-    void resetLidarCenteringState() {
+    void resetSideLidarAvoidanceState() {
         left_lidar_filter_ready = false;
         right_lidar_filter_ready = false;
         filtered_left_distance_mm = 0;
         filtered_right_distance_mm = 0;
-        current_lidar_correction = 0;
-        lidar_wall_state = 0;
+        current_side_avoidance_correction = 0;
     }
 
     void updateTurnCommand() {
@@ -751,7 +740,7 @@ private:
 
         turn_pid.reset(initial_error);
         turn_settle_start_ms = 0;
-        resetLidarCenteringState();
+        resetSideLidarAvoidanceState();
     }
 
     bool finishForwardRunIfNeeded(float distance_mm, char next_command) {
@@ -883,19 +872,18 @@ private:
     bool wall_holding_position = false;
     unsigned long wall_outside_band_start_ms = 0;
 
-    bool lidar_centering_enabled = false;
-    float side_wall_target_mm = 50.0;
-    const float lidar_centering_kp = 0.55;
-    const float max_lidar_correction = 18.0;
-    const float max_lidar_correction_step = 3.0;
-    const float lidar_centering_deadband_mm = 3.0;
+    bool side_lidar_avoidance_enabled = false;
+    float side_clearance_mm = 50.0;
+    const float side_avoidance_kp = 0.67;
+    const float max_side_avoidance_correction = 18.0;
+    const float max_side_avoidance_step = 3.0;
+    const float side_avoidance_deadband_mm = 3.0;
     const float side_lidar_filter_alpha = 0.35;
     const uint16_t min_side_wall_mm = 1;
     const uint16_t max_side_wall_mm = 100;
     float filtered_left_distance_mm = 0;
     float filtered_right_distance_mm = 0;
-    float current_lidar_correction = 0;
-    uint8_t lidar_wall_state = 0;
+    float current_side_avoidance_correction = 0;
     bool left_lidar_filter_ready = false;
     bool right_lidar_filter_ready = false;
     bool front_lidar_safety_enabled = false;

@@ -51,7 +51,7 @@ Robot robot(
 StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
 
-const char command_string[] = "fffffrflfrfrflflfrfrflfrffff";
+const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
 // const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
 
 bool i2cDevicePresent(uint8_t address) {
@@ -128,8 +128,8 @@ void setup() {
 
     delay(1000);
 
-    // Use both side LiDARs to keep about 50 mm from the maze walls.
-    robot.enableLidarCentering(true, 50.0);
+    // Side LiDARs only steer away when a wall is closer than 50 mm.
+    robot.enableSideLidarAvoidance(true, 50.0);
 
     // Start the next turn if the front wall is closer than 50 mm.
     robot.enableFrontLidarSafety(true, 50);
