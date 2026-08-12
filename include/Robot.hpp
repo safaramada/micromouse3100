@@ -680,20 +680,16 @@ private:
             }
         }
 
-        float lidar_correction = getSideLidarAvoidanceCorrection();
-
-        distance_mm = getAverageDistanceMM();
-        if (finishCustomForwardIfNeeded(distance_mm)) {
-            return;
-        }
-
         imu.update();
         float heading_error =
             IMU::wrapAngleDeg(imu.getYawDeg() - target_yaw_deg);
         float imu_correction = heading_pid.computeFromError(heading_error);
 
+        // A custom (angle,distance) command is intended to follow a precise
+        // straight heading. Keep front collision stopping above, but do not
+        // let side LiDAR readings bend this path.
         float correction = constrain(
-            imu_correction + lidar_correction,
+            imu_correction,
             -max_forward_correction,
             max_forward_correction
         );
