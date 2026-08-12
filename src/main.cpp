@@ -53,7 +53,7 @@ Turning turningTask(robot);
 
 // const char command_string[] = "frfrfflflff";
 // const char command_string[] = "ffflfrffrffflfr";
-const char command_string[] = "ffffffffrrfffffff";
+const char command_string[] = "rrfffffflfrflfflfrfrflff";
 
 
 bool i2cDevicePresent(uint8_t address) {

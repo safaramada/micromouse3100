@@ -605,6 +605,33 @@ private:
         float imu_correction = heading_pid.computeFromError(heading_error);
         float encoder_correction = getEncoderBalanceCorrection();
 
+        float forward_pwm = getForwardApproachPWM(distance_mm);
+
+        // Emergency side-wall correction gets priority over IMU/encoder
+        // straight-line control and is allowed to slow the inside wheel
+        // below the normal 80 PWM floor.
+        if (fabs(lidar_correction) >= emergency_correction_threshold) {
+            float left_pwm = constrain(
+                forward_pwm + lidar_correction,
+                0.0f,
+                180.0f
+            );
+
+            float right_pwm = constrain(
+                forward_pwm - lidar_correction,
+                0.0f,
+                180.0f
+            );
+
+            Serial.print("SIDE EMERGENCY DRIVE  L_PWM: ");
+            Serial.print(left_pwm);
+            Serial.print(" R_PWM: ");
+            Serial.println(right_pwm);
+
+            setDrivePWM(left_pwm, right_pwm);
+            return;
+        }
+
         float correction =
             imu_correction + encoder_correction + lidar_correction;
 
@@ -614,7 +641,6 @@ private:
             max_forward_correction
         );
 
-        float forward_pwm = getForwardApproachPWM(distance_mm);
         float left_pwm = constrain(forward_pwm + correction, 80, 180);
         float right_pwm = constrain(forward_pwm - correction, 80, 180);
 
@@ -632,6 +658,46 @@ private:
 
         uint16_t right_reading_mm = right_lidar.readDistance();
         bool right_wall = isValidSideWall(right_lidar, right_reading_mm);
+
+        // ============================================================
+        // EMERGENCY SIDE WALL AVOIDANCE
+        // Use RAW readings so filtering cannot delay the emergency.
+        // ============================================================
+
+        if (left_wall && right_wall &&
+            left_reading_mm < emergency_side_distance_mm &&
+            right_reading_mm < emergency_side_distance_mm) {
+
+            if (left_reading_mm < right_reading_mm) {
+                Serial.print("!!! LEFT EMERGENCY: ");
+                Serial.println(left_reading_mm);
+
+                current_lidar_correction = emergency_lidar_correction;
+            } else {
+                Serial.print("!!! RIGHT EMERGENCY: ");
+                Serial.println(right_reading_mm);
+
+                current_lidar_correction = -emergency_lidar_correction;
+            }
+
+            return current_lidar_correction;
+        }
+
+        if (left_wall && left_reading_mm < emergency_side_distance_mm) {
+            Serial.print("!!! LEFT EMERGENCY: ");
+            Serial.println(left_reading_mm);
+
+            current_lidar_correction = emergency_lidar_correction;
+            return current_lidar_correction;
+        }
+
+        if (right_wall && right_reading_mm < emergency_side_distance_mm) {
+            Serial.print("!!! RIGHT EMERGENCY: ");
+            Serial.println(right_reading_mm);
+
+            current_lidar_correction = -emergency_lidar_correction;
+            return current_lidar_correction;
+        }
 
         float left_distance_mm = 0;
         float right_distance_mm = 0;
@@ -665,25 +731,35 @@ private:
             return 0;
         }
 
-        // A corner changes which walls are visible. Start the new correction
-        // from zero instead of blending it with the previous corridor.
+        // If visible walls change, reset the previous correction.
         if (wall_state != lidar_wall_state) {
             lidar_wall_state = wall_state;
             current_lidar_correction = 0;
         }
 
+        // ============================================================
+        // NORMAL GENTLE SIDE LIDAR CORRECTION
+        // ============================================================
+
         float wall_error_mm = 0;
 
         if (left_wall && right_wall) {
             wall_error_mm = right_distance_mm - left_distance_mm;
-        } else if (left_wall && left_distance_mm < side_wall_target_mm) {
-            wall_error_mm = side_wall_target_mm - left_distance_mm;
-        } else if (right_wall && right_distance_mm < side_wall_target_mm) {
-            wall_error_mm = right_distance_mm - side_wall_target_mm;
+
+        } else if (left_wall &&
+                   left_distance_mm < side_wall_target_mm) {
+
+            wall_error_mm =
+                side_wall_target_mm - left_distance_mm;
+
+        } else if (right_wall &&
+                   right_distance_mm < side_wall_target_mm) {
+
+            wall_error_mm =
+                right_distance_mm - side_wall_target_mm;
         }
 
-        // Ignore small differences caused by normal sensor noise. Removing the
-        // deadband from larger errors keeps the correction continuous.
+        // Ignore small differences caused by sensor noise.
         if (fabs(wall_error_mm) <= lidar_centering_deadband_mm) {
             wall_error_mm = 0;
         } else {
@@ -700,31 +776,39 @@ private:
             max_lidar_correction
         );
 
+        // Normal correction remains smooth.
         return slewLidarCorrection(target_correction);
     }
 
     bool isValidSideWall(Lidar& lidar, uint16_t distance_mm) {
         return lidar.isReadingValid() &&
-               distance_mm >= min_side_wall_mm &&
-               distance_mm <= max_side_wall_mm;
+            distance_mm >= min_side_wall_mm &&
+            distance_mm <= max_side_wall_mm;
     }
 
-    float filterSideDistance(uint16_t reading_mm,
-                             float& filtered_distance_mm,
-                             bool& filter_ready) {
+    float filterSideDistance(
+        uint16_t reading_mm,
+        float& filtered_distance_mm,
+        bool& filter_ready
+    ) {
         if (!filter_ready) {
-            filtered_distance_mm = static_cast<float>(reading_mm);
+            filtered_distance_mm =
+                static_cast<float>(reading_mm);
             filter_ready = true;
         } else {
-            filtered_distance_mm += side_lidar_filter_alpha *
-                (static_cast<float>(reading_mm) - filtered_distance_mm);
+            filtered_distance_mm +=
+                side_lidar_filter_alpha *
+                (static_cast<float>(reading_mm)
+                - filtered_distance_mm);
         }
 
         return filtered_distance_mm;
     }
 
     float slewLidarCorrection(float target_correction) {
-        float change = target_correction - current_lidar_correction;
+        float change =
+            target_correction - current_lidar_correction;
+
         change = constrain(
             change,
             -max_lidar_correction_step,
@@ -732,9 +816,10 @@ private:
         );
 
         current_lidar_correction += change;
+
         return current_lidar_correction;
     }
-
+    
     void resetLidarCenteringState() {
         left_lidar_filter_ready = false;
         right_lidar_filter_ready = false;
@@ -1026,12 +1111,20 @@ private:
     unsigned long wall_outside_band_start_ms = 0;
 
     bool lidar_centering_enabled = false;
-    float side_wall_target_mm = 50.0;
-    const float lidar_centering_kp = 0.25f;
-    const float max_lidar_correction = 8.0f;
-    const float max_lidar_correction_step = 1.5f;
+    float side_wall_target_mm = 60.0;
+    const float lidar_centering_kp = 0.75f;
+    const float max_lidar_correction = 25.0f;
+    const float max_lidar_correction_step = 4.0f;
     const float lidar_centering_deadband_mm = 3.0;
     const float side_lidar_filter_alpha = 0.35;
+
+    // Emergency side-wall avoidance.
+    // Raw LiDAR reading below 45 mm immediately overrides normal
+    // IMU/encoder correction with a strong steering command.
+    const uint16_t emergency_side_distance_mm = 45;
+    const float emergency_lidar_correction = 45.0f;
+    const float emergency_correction_threshold = 44.0f;
+
     const uint16_t min_side_wall_mm = 1;
     const uint16_t max_side_wall_mm = 100;
     float filtered_left_distance_mm = 0;
