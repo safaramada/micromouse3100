@@ -876,7 +876,7 @@ private:
     float side_clearance_mm = 50.0;
     const float side_avoidance_kp = 0.67;
     const float max_side_avoidance_correction = 18.0;
-    const float max_side_avoidance_step = 3.0;
+    const float max_side_avoidance_step = 6.0;
     const float side_avoidance_deadband_mm = 3.0;
     const float side_lidar_filter_alpha = 0.35;
     const uint16_t min_side_wall_mm = 1;
