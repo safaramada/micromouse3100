@@ -4,7 +4,6 @@
 #include <math.h>
 
 #include "Encoder.hpp"
-#include "ExtendedKalmanFilter.hpp"
 #include "IMU.hpp"
 #include "Lidar.hpp"
 #include "Motor.hpp"
@@ -50,7 +49,7 @@ public:
           right_lidar(right_lidar),
           imu(imu),
           wheel_radius_mm(wheel_radius_mm),
-          ekf(wheel_base_mm),
+          wheel_base_mm(wheel_base_mm),
           heading_pid(2.0, 0.0, 0.06),
           distance_pid(1.2, 0.02, 0.04),
           turn_pid(1.6, 0.0, 0.10) {}
@@ -63,7 +62,6 @@ public:
 
         imu.begin();
         imu.zeroYaw();
-        initialiseStateEstimator();
 
         stop();
     }
@@ -106,7 +104,7 @@ public:
         start_left_rotation = left_encoder.getRotation();
         start_right_rotation = right_encoder.getRotation();
 
-        target_yaw_deg = getHeadingDeg();
+        target_yaw_deg = imu.getYawDeg();
         heading_pid.reset();
         resetLidarCenteringState();
 
@@ -119,7 +117,7 @@ public:
         finished = false;
 
         target_wall_distance_mm = front_distance_mm;
-        target_yaw_deg = getHeadingDeg();
+        target_yaw_deg = imu.getYawDeg();
 
         distance_pid.reset();
         heading_pid.reset();
@@ -140,7 +138,7 @@ public:
         task = TASK_TURN;
         finished = false;
         turn_hold_enabled = false;
-        target_yaw_deg = IMU::wrapAngleDeg(getHeadingDeg() + angle_deg);
+        target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
         beginTurnController();
     }
 
@@ -175,7 +173,7 @@ public:
         turn_hold_enabled = true;
 
         // Save this once. Do not recalculate it after the robot is disturbed.
-        target_yaw_deg = IMU::wrapAngleDeg(getHeadingDeg() + angle_deg);
+        target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
 
         beginTurnController();
 
@@ -184,7 +182,7 @@ public:
     }
 
     void update() {
-        updateStateEstimate();
+        imu.update();
 
         switch (task) {
             case TASK_STRAIGHT_LINE:
@@ -214,20 +212,6 @@ public:
         return finished;
     }
 
-    float getPoseXMM() const {
-        return ekf.getXMM();
-    }
-
-    float getPoseYMM() const {
-        return ekf.getYMM();
-    }
-
-    float getHeadingDeg() {
-        return ekf.isInitialised()
-            ? ekf.getHeadingDeg()
-            : imu.getYawDeg();
-    }
-
     void stop() {
         stopMotors();
         task = TASK_IDLE;
@@ -243,7 +227,7 @@ private:
             return;
         }
 
-        float current_yaw = getHeadingDeg();
+        float current_yaw = imu.getYawDeg();
 
         // Positive if robot has rotated away from starting heading
         float heading_error = IMU::wrapAngleDeg(current_yaw - target_yaw_deg);
@@ -362,7 +346,7 @@ private:
         }
 
         // Heading correction to keep the robot straight.
-        float current_yaw = getHeadingDeg();
+        float current_yaw = imu.getYawDeg();
 
         float heading_error =
             IMU::wrapAngleDeg(current_yaw - target_yaw_deg);
@@ -399,7 +383,7 @@ private:
     }
 
     void updateTurn() {
-        float current_yaw = getHeadingDeg();
+        float current_yaw = imu.getYawDeg();
 
         float yaw_error = IMU::wrapAngleDeg(target_yaw_deg - current_yaw);
 
@@ -498,7 +482,7 @@ private:
 
             target_distance_mm =
                 maze_cell_distance_mm * active_forward_command_count;
-            target_yaw_deg = getHeadingDeg();
+            target_yaw_deg = imu.getYawDeg();
 
             heading_pid.reset();
             resetLidarCenteringState();
@@ -507,7 +491,7 @@ private:
 
         else if (command == 'l' || command == 'L') {
             target_yaw_deg =
-                IMU::wrapAngleDeg(getHeadingDeg() + 90.0);
+                IMU::wrapAngleDeg(imu.getYawDeg() + 90.0);
 
             beginTurnController();
             command_state = COMMAND_TURN;
@@ -515,7 +499,7 @@ private:
 
         else if (command == 'r' || command == 'R') {
             target_yaw_deg =
-                IMU::wrapAngleDeg(getHeadingDeg() - 90.0);
+                IMU::wrapAngleDeg(imu.getYawDeg() - 90.0);
 
             beginTurnController();
             command_state = COMMAND_TURN;
@@ -578,9 +562,9 @@ private:
             return;
         }
 
-        updateStateEstimate();
+        imu.update();
         float heading_error =
-            IMU::wrapAngleDeg(getHeadingDeg() - target_yaw_deg);
+            IMU::wrapAngleDeg(imu.getYawDeg() - target_yaw_deg);
 
         float imu_correction = heading_pid.computeFromError(heading_error);
 
@@ -725,7 +709,7 @@ private:
 
     void updateTurnCommand() {
         float yaw_error =
-            IMU::wrapAngleDeg(target_yaw_deg - getHeadingDeg());
+            IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
 
         if (fabs(yaw_error) <= turn_tolerance_deg) {
             stopMotors();
@@ -763,7 +747,7 @@ private:
 
     void beginTurnController() {
         float initial_error =
-            IMU::wrapAngleDeg(target_yaw_deg - getHeadingDeg());
+            IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
 
         turn_pid.reset(initial_error);
         turn_settle_start_ms = 0;
@@ -826,83 +810,7 @@ private:
         return average_rotation * wheel_radius_mm;
     }
 
-    void initialiseStateEstimator() {
-        previous_left_estimator_rotation = left_encoder.getRotation();
-        previous_right_estimator_rotation = right_encoder.getRotation();
-        left_encoder_polarity = 0;
-        right_encoder_polarity = 0;
-        last_left_motion_direction = 0;
-        last_right_motion_direction = 0;
-
-        ekf.reset(0.0f, 0.0f, imu.getYawDeg());
-        ekf.begin(imu.getYawDeg());
-    }
-
-    void updateStateEstimate() {
-        imu.update();
-
-        float left_rotation = left_encoder.getRotation();
-        float right_rotation = right_encoder.getRotation();
-        float raw_left_delta =
-            left_rotation - previous_left_estimator_rotation;
-        float raw_right_delta =
-            right_rotation - previous_right_estimator_rotation;
-
-        previous_left_estimator_rotation = left_rotation;
-        previous_right_estimator_rotation = right_rotation;
-
-        float left_delta = normaliseEncoderDelta(
-            raw_left_delta,
-            last_left_motion_direction,
-            left_encoder_polarity
-        );
-        float right_delta = normaliseEncoderDelta(
-            raw_right_delta,
-            last_right_motion_direction,
-            right_encoder_polarity
-        );
-
-        ekf.updateWheelDistances(
-            left_delta * wheel_radius_mm,
-            right_delta * wheel_radius_mm,
-            imu.getYawDeg()
-        );
-    }
-
-    float normaliseEncoderDelta(float raw_delta,
-                                int8_t commanded_direction,
-                                int8_t& encoder_polarity) {
-        if (fabs(raw_delta) < 0.000001f) {
-            return 0.0f;
-        }
-
-        if (encoder_polarity == 0 && commanded_direction != 0) {
-            int8_t raw_direction = raw_delta > 0.0f ? 1 : -1;
-            encoder_polarity = commanded_direction * raw_direction;
-        }
-
-        // Until this wheel has moved under a known command, ignoring its
-        // delta is safer than allowing an unknown sign to rotate the EKF.
-        if (encoder_polarity == 0) {
-            return 0.0f;
-        }
-
-        return raw_delta * encoder_polarity;
-    }
-
     void setDrivePWM(float left_pwm, float right_pwm) {
-        if (left_pwm > 0.0f) {
-            last_left_motion_direction = 1;
-        } else if (left_pwm < 0.0f) {
-            last_left_motion_direction = -1;
-        }
-
-        if (right_pwm > 0.0f) {
-            last_right_motion_direction = 1;
-        } else if (right_pwm < 0.0f) {
-            last_right_motion_direction = -1;
-        }
-
         left_motor.setPWM(static_cast<int16_t>(constrain(-left_pwm, -255, 255)));
 
         // Right motor is inverted because negative PWM was forward for your robot
@@ -930,15 +838,7 @@ private:
     IMU& imu;
 
     const float wheel_radius_mm;
-
-    ExtendedKalmanFilter ekf;
-
-    float previous_left_estimator_rotation = 0.0f;
-    float previous_right_estimator_rotation = 0.0f;
-    int8_t left_encoder_polarity = 0;
-    int8_t right_encoder_polarity = 0;
-    int8_t last_left_motion_direction = 0;
-    int8_t last_right_motion_direction = 0;
+    const float wheel_base_mm;
 
     PIDController heading_pid;
     PIDController distance_pid;
