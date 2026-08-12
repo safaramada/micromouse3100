@@ -9,6 +9,7 @@
 #include "Robot.hpp"
 #include "StraightLineTracking.hpp"
 #include "Turning.hpp"
+#include "AutonomousMapping.hpp"
 
 
 using namespace mtrn3100;
@@ -50,6 +51,9 @@ Robot robot(
 
 StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
+
+// 4.3
+AutonomousMapping autonomousMapping(robot);
 
 const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
 // const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
@@ -134,15 +138,31 @@ void setup() {
     // Start the next turn if the front wall is closer than 50 mm.
     robot.enableFrontLidarSafety(true, 50);
 
-    robot.startCommandString(command_string, 130);
+    // robot.startCommandString(command_string, 130);
     // robot.startTurnHold(-90.0);
     // since its from the bottom, plus 2cm so its plus 20cm
     // robot.startWallDistance(120);   // DIRIVING AND STOPPING TASK 
     // robot.startStraightLine(3000, 130); // STRAIGHT LINE TRACKING TASK
 
+    // 4.3
+    autonomousMapping.begin(
+        0,                              // start row
+        0,                              // start column
+        AutonomousMapping::SOUTH,       // start direction
+        4,                              // goal row
+        7                               // goal column
+);
+
 }
 
+/*
 void loop() {
     robot.update();
     delay(10);
+} 
+*/
+
+void loop() {
+    autonomousMapping.update();
+    delay(500);
 }
