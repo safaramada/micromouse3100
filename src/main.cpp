@@ -146,11 +146,11 @@ void setup() {
 
     // 4.3
     autonomousMapping.begin(
-        0,                              // start row
-        0,                              // start column
+        4,                              // start row
+        1,                              // start column
         AutonomousMapping::SOUTH,       // start direction
-        4,                              // goal row
-        7                               // goal column
+        5,                              // goal row
+        6                               // goal column
 );
 
 }
@@ -164,5 +164,5 @@ void loop() {
 
 void loop() {
     autonomousMapping.update();
-    delay(500);
+    delay(10);
 }

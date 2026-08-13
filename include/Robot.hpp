@@ -97,6 +97,7 @@ public:
     void startStraightLine(float distance_mm, int16_t pwm = 130) {
         task = TASK_STRAIGHT_LINE;
         finished = false;
+        front_obstacle_stopped = false;
 
         target_distance_mm = distance_mm;
         base_pwm = constrain(abs(pwm), 80, 180);
@@ -213,6 +214,10 @@ public:
         return finished;
     }
 
+    bool wasStoppedByFrontObstacle() const {
+        return front_obstacle_stopped;
+    }
+
     void stop() {
         stopMotors();
         task = TASK_IDLE;
@@ -226,6 +231,22 @@ private:
         if (distance_mm >= target_distance_mm) {
             finishTask();
             return;
+        }
+
+        // Straight-line tasks are used by autonomous mapping, so front safety
+        // must be applied here as well as in command-string driving.
+        if (front_lidar_safety_enabled) {
+            uint16_t front_distance_mm = front_lidar.readDistance();
+
+            if (front_lidar.isReadingValid() &&
+                front_distance_mm <= front_stop_distance_mm) {
+                front_obstacle_stopped = true;
+                Serial.print(F("Front obstacle: "));
+                Serial.print(front_distance_mm);
+                Serial.println(F(" mm; stopping"));
+                finishTask();
+                return;
+            }
         }
 
         float current_yaw = imu.getYawDeg();
@@ -888,6 +909,7 @@ private:
     bool right_lidar_filter_ready = false;
     bool front_lidar_safety_enabled = false;
     uint16_t front_stop_distance_mm = 40;
+    bool front_obstacle_stopped = false;
 
     const char* command_string = nullptr;
     uint8_t command_index = 0;

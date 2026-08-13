@@ -39,6 +39,7 @@ public:
         // Set the timeout for the sensor
         sensor.setTimeout(timeout_ms);
         sensor.init();
+        bool init_ok = (sensor.last_status == 0);
         sensor.configureDefault();
 
         // Set the I2C address if it's not the default
@@ -47,7 +48,11 @@ public:
         }
 
         // The library records the status of the most recent I2C transaction.
-        ready = (sensor.last_status == 0);
+        ready = init_ok && (sensor.last_status == 0);
+
+        Serial.print(F("LiDAR 0x"));
+        Serial.print(address, HEX);
+        Serial.println(ready ? F(" ready") : F(" FAILED"));
     }
 
     // Returns the measured distance in millimetres, or 0 when the latest
