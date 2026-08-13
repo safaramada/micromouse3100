@@ -104,9 +104,9 @@ void setup() {
     // backtracking, then run the calculated shortest route to the goal.
     autonomousMapping.begin(
         0,                              // start row
-        0,                              // start column
+        2,                              // start column (first usable top cell)
         AutonomousMapping::SOUTH,       // start direction
-        1,                              // goal row
+        0,                              // goal row
         3                               // goal column
     );
 

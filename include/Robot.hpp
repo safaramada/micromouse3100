@@ -18,6 +18,11 @@ enum RobotTask {
     TASK_TURN
 };
 
+enum EmergencyStopReason : uint8_t {
+    EMERGENCY_NONE,
+    EMERGENCY_FRONT
+};
+
 // Hardware and motion control used by Task 4.3 autonomous mapping.
 class Robot {
 public:
@@ -88,6 +93,7 @@ public:
         task = TASK_STRAIGHT_LINE;
         finished = false;
         front_wall_stopped = false;
+        emergency_stop_reason = EMERGENCY_NONE;
 
         target_distance_mm = distance_mm;
         base_pwm = constrain(abs(pwm), 80, 180);
@@ -106,6 +112,7 @@ public:
         task = TASK_TURN;
         finished = false;
         front_wall_stopped = false;
+        emergency_stop_reason = EMERGENCY_NONE;
         target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
         beginTurnController();
     }
@@ -115,6 +122,14 @@ public:
         side_lidar_avoidance_enabled = enabled;
         side_clearance_mm = minimum_clearance_mm;
         resetSideLidarAvoidanceState();
+    }
+
+    void enableEmergencyProtection(bool enabled,
+                                   uint16_t front_distance_mm = 45,
+                                   uint16_t side_distance_mm = 25) {
+        emergency_protection_enabled = enabled;
+        emergency_front_distance_mm = front_distance_mm;
+        emergency_side_distance_mm = side_distance_mm;
     }
 
     void update() {
@@ -144,6 +159,10 @@ public:
         return front_wall_stopped;
     }
 
+    EmergencyStopReason getEmergencyStopReason() const {
+        return emergency_stop_reason;
+    }
+
     float getTravelledDistanceMM() {
         return getAverageDistanceMM();
     }
@@ -165,6 +184,7 @@ public:
         task = TASK_IDLE;
         finished = true;
         front_wall_stopped = false;
+        emergency_stop_reason = EMERGENCY_NONE;
     }
 
 private:
@@ -212,13 +232,18 @@ private:
             return;
         }
 
-        // This is a final collision guard. AutonomousMapping performs a
-        // separate, longer-range check before starting each cell movement.
-        if (front_stop_distance_mm > 0) {
+        // Close-range protection is independent of mapping. It remains active
+        // throughout forward motion even after the stationary map check.
+        const uint16_t active_front_stop_mm = front_stop_distance_mm > 0
+            ? front_stop_distance_mm
+            : emergency_front_distance_mm;
+        if ((emergency_protection_enabled || front_stop_distance_mm > 0) &&
+            active_front_stop_mm > 0) {
             bool front_wall = false;
-            if (senseFrontWall(front_stop_distance_mm, front_wall) &&
+            if (senseFrontWall(active_front_stop_mm, front_wall) &&
                 front_wall) {
                 front_wall_stopped = true;
+                emergency_stop_reason = EMERGENCY_FRONT;
                 finishTask();
                 return;
             }
@@ -239,6 +264,11 @@ private:
 
         float imu_correction = heading_pid.computeFromError(heading_error);
         float lidar_correction = getSideLidarAvoidanceCorrection();
+
+        if (emergency_stop_reason != EMERGENCY_NONE) {
+            finishTask();
+            return;
+        }
 
         // The two side readings also take time. Never send another forward
         // command if the cell target was crossed while waiting for them.
@@ -302,7 +332,8 @@ private:
     }
 
     float getSideLidarAvoidanceCorrection() {
-        if (!side_lidar_avoidance_enabled) {
+        if (!side_lidar_avoidance_enabled &&
+            !emergency_protection_enabled) {
             resetSideLidarAvoidanceState();
             return 0;
         }
@@ -312,6 +343,59 @@ private:
 
         uint16_t right_reading_mm = right_lidar.readDistance();
         bool right_wall = isValidSideWall(right_lidar, right_reading_mm);
+
+        if (emergency_protection_enabled) {
+            const bool left_emergency_close = isEmergencyClose(
+                left_lidar,
+                left_reading_mm,
+                emergency_side_distance_mm
+            );
+            const bool right_emergency_close = isEmergencyClose(
+                right_lidar,
+                right_reading_mm,
+                emergency_side_distance_mm
+            );
+
+            // Side walls never end the 180 mm cell action and never command a
+            // reverse. A close wall instead produces the strongest permitted
+            // steering away while the forward encoder target remains active.
+            if (left_emergency_close && !right_emergency_close) {
+                current_side_avoidance_correction =
+                    max_side_avoidance_correction;
+                return current_side_avoidance_correction;
+            }
+            if (right_emergency_close && !left_emergency_close) {
+                current_side_avoidance_correction =
+                    -max_side_avoidance_correction;
+                return current_side_avoidance_correction;
+            }
+            if (left_emergency_close && right_emergency_close) {
+                // In a genuinely narrow corridor, steer away from the nearer
+                // side when both numeric readings are valid. Equal/underflow
+                // readings continue straight rather than oscillating.
+                if (left_lidar.isReadingValid() &&
+                    right_lidar.isReadingValid()) {
+                    if (left_reading_mm < right_reading_mm) {
+                        current_side_avoidance_correction =
+                            max_side_avoidance_correction;
+                    } else if (right_reading_mm < left_reading_mm) {
+                        current_side_avoidance_correction =
+                            -max_side_avoidance_correction;
+                    } else {
+                        current_side_avoidance_correction = 0;
+                    }
+                    return current_side_avoidance_correction;
+                }
+
+                current_side_avoidance_correction = 0;
+                return 0;
+            }
+        }
+
+        if (!side_lidar_avoidance_enabled) {
+            resetSideLidarAvoidanceState();
+            return 0;
+        }
 
         float left_distance_mm = 0;
         float right_distance_mm = 0;
@@ -372,6 +456,21 @@ private:
         return lidar.isReadingValid() &&
                distance_mm >= min_side_wall_mm &&
                distance_mm <= max_side_wall_mm;
+    }
+
+    bool isEmergencyClose(Lidar& lidar,
+                          uint16_t distance_mm,
+                          uint16_t threshold_mm) {
+        if (lidar.isReadingValid()) {
+            return distance_mm > 0 && distance_mm <= threshold_mm;
+        }
+
+        if (!lidar.isReady() || lidar.timedOut()) {
+            return false;
+        }
+
+        const uint8_t status = lidar.getRangeStatus();
+        return status == 12 || status == 14;
     }
 
     float filterSideDistance(uint16_t reading_mm,
@@ -495,9 +594,13 @@ private:
     RobotTask task = TASK_IDLE;
     bool finished = true;
     bool front_wall_stopped = false;
+    EmergencyStopReason emergency_stop_reason = EMERGENCY_NONE;
+    bool emergency_protection_enabled = false;
 
     int16_t base_pwm = 120;
     uint16_t front_stop_distance_mm = 0;
+    uint16_t emergency_front_distance_mm = 45;
+    uint16_t emergency_side_distance_mm = 25;
     float target_distance_mm = 0;
     float target_yaw_deg = 0;
     float start_left_rotation = 0;
