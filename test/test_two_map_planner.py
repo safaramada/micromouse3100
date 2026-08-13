@@ -460,6 +460,23 @@ class TwoMapPlannerTests(unittest.TestCase):
         preview = prepare_mapping_preview(bad_portals)
 
         self.assertEqual(preview.coordinate_grid_bgr.shape, preview.rectified_bgr.shape)
+        self.assertIsNotNone(preview.clip_grid_result)
+        self.assertIsNotNone(preview.calibration.homography)
+        self.assertGreaterEqual(preview.clip_grid_result.inlier_count, 20)
+        self.assertEqual(preview.calibration.centre((0, 0)), (41, 41))
+        self.assertEqual(preview.calibration.centre((8, 8)), (284, 284))
+
+    def test_coordinate_preview_can_still_use_fixed_grid_fallback(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        preview = prepare_mapping_preview(
+            DemoConfig(
+                image_file=project_root / "mazemappingtask2" / "maze2.png",
+                grid_from_clips=False,
+            )
+        )
+
+        self.assertIsNone(preview.clip_grid_result)
+        self.assertIsNone(preview.calibration.homography)
         self.assertEqual(preview.calibration.centre((0, 0)), (44, 42))
         self.assertEqual(preview.calibration.centre((8, 8)), (284, 282))
 

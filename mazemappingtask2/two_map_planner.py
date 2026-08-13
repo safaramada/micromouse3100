@@ -29,6 +29,7 @@ from computer.task4 import (
     PlanStatus,
     PlannerConfig,
 )
+from mazemapping.clip_grid import ClipGridResult, infer_clip_grid, project_points
 from mazemapping.mask_maze import create_maze_masks
 
 
@@ -212,6 +213,7 @@ class GridCalibration:
 
     x_edges: Tuple[float, ...]
     y_edges: Tuple[float, ...]
+    homography: Optional[Tuple[Tuple[float, float, float], ...]] = None
 
     @property
     def rows(self) -> int:
@@ -228,15 +230,59 @@ class GridCalibration:
             raise ValueError("x_edges must be strictly increasing")
         if any(b <= a for a, b in zip(self.y_edges, self.y_edges[1:])):
             raise ValueError("y_edges must be strictly increasing")
+        if self.homography is not None:
+            matrix = np.asarray(self.homography, dtype=np.float64)
+            if matrix.shape != (3, 3) or not np.isfinite(matrix).all():
+                raise ValueError("grid homography must be a finite 3 x 3 matrix")
+            if abs(float(np.linalg.det(matrix))) < 1e-12:
+                raise ValueError("grid homography must be invertible")
+
+    def project(self, logical_points: Sequence[Sequence[float]]) -> np.ndarray:
+        """Project logical ``(column, row)`` points into image pixels."""
+        points = np.asarray(logical_points, dtype=np.float32).reshape((-1, 2))
+        if self.homography is None:
+            projected = []
+            for column, row in points:
+                x = np.interp(column, np.arange(len(self.x_edges)), self.x_edges)
+                y = np.interp(row, np.arange(len(self.y_edges)), self.y_edges)
+                projected.append((x, y))
+            return np.asarray(projected, dtype=np.float32)
+        return project_points(points, np.asarray(self.homography, dtype=np.float64))
 
     def centre(self, cell: Cell) -> Point:
         row, column = cell
         if not (0 <= row < self.rows and 0 <= column < self.columns):
             raise ValueError(f"cell {cell} is outside the calibrated maze")
-        return (
-            int(round((self.x_edges[column] + self.x_edges[column + 1]) / 2.0)),
-            int(round((self.y_edges[row] + self.y_edges[row + 1]) / 2.0)),
+        x, y = self.project(((column + 0.5, row + 0.5),))[0]
+        return int(round(float(x))), int(round(float(y)))
+
+    def cell_quad(self, cell: Cell) -> np.ndarray:
+        """Return a cell's four image-space corners clockwise from top-left."""
+        row, column = cell
+        if not (0 <= row < self.rows and 0 <= column < self.columns):
+            raise ValueError(f"cell {cell} is outside the calibrated maze")
+        return self.project(
+            (
+                (column, row),
+                (column + 1, row),
+                (column + 1, row + 1),
+                (column, row + 1),
+            )
         )
+
+    def boundary_segment(self, first: Cell, second: Cell) -> np.ndarray:
+        """Return the image-space endpoints of a shared cardinal boundary."""
+        row, column = first
+        next_row, next_column = second
+        if abs(next_row - row) + abs(next_column - column) != 1:
+            raise ValueError("boundary cells must be cardinally adjacent")
+        if row == next_row:
+            boundary_column = max(column, next_column)
+            logical = ((boundary_column, row), (boundary_column, row + 1))
+        else:
+            boundary_row = max(row, next_row)
+            logical = ((column, boundary_row), (column + 1, boundary_row))
+        return self.project(logical)
 
     def region_quad(self, top: int, left: int, size: int) -> np.ndarray:
         bottom = top + size
@@ -245,11 +291,8 @@ class GridCalibration:
             raise ValueError("continuous-region row bounds are outside the maze")
         if not (0 <= left < right <= self.columns):
             raise ValueError("continuous-region column bounds are outside the maze")
-        x0, x1 = self.x_edges[left], self.x_edges[right]
-        y0, y1 = self.y_edges[top], self.y_edges[bottom]
-        return np.asarray(
-            [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
-            dtype=np.float32,
+        return self.project(
+            ((left, top), (right, top), (right, bottom), (left, bottom))
         )
 
 
@@ -338,6 +381,49 @@ def make_grid_calibration(
     return calibration
 
 
+def make_clip_grid_calibration(
+    image_bgr: np.ndarray,
+    rows: int = 9,
+    columns: int = 9,
+    image_transform: Optional[np.ndarray] = None,
+    excluded_logical_regions: Sequence[Tuple[int, int, int, int]] = (),
+) -> Tuple[GridCalibration, ClipGridResult]:
+    """Fit Task 1's cyan-clip grid and express it in planner coordinates.
+
+    Clip detection runs on the original full-resolution photograph. The
+    optional ``image_transform`` is then composed with that fit, avoiding the
+    loss of small cyan clips when the image is downsampled for Task 4.2.
+    """
+    result = infer_clip_grid(
+        image_bgr,
+        rows=rows,
+        columns=columns,
+        excluded_logical_regions=excluded_logical_regions,
+    )
+    homography = np.asarray(result.homography, dtype=np.float64)
+    if image_transform is not None:
+        image_transform = np.asarray(image_transform, dtype=np.float64)
+        if image_transform.shape != (3, 3) or not np.isfinite(image_transform).all():
+            raise ValueError("image_transform must be a finite 3 x 3 matrix")
+        homography = image_transform @ homography
+
+    x_samples = project_points(
+        np.asarray([(column, rows / 2.0) for column in range(columns + 1)]),
+        homography,
+    )[:, 0]
+    y_samples = project_points(
+        np.asarray([(columns / 2.0, row) for row in range(rows + 1)]),
+        homography,
+    )[:, 1]
+    calibration = GridCalibration(
+        x_edges=tuple(float(value) for value in x_samples),
+        y_edges=tuple(float(value) for value in y_samples),
+        homography=tuple(tuple(float(value) for value in row) for row in homography),
+    )
+    calibration.validate()
+    return calibration, result
+
+
 def _longest_true_run(signal: np.ndarray) -> int:
     longest = 0
     current = 0
@@ -375,6 +461,60 @@ def wall_evidence_between(
     vertical_evidence = cv2.bitwise_or(main_dark_mask, vertical_line_mask)
 
     vertical_boundary = row == next_row
+    if calibration.homography is not None:
+        mask = vertical_evidence if vertical_boundary else horizontal_evidence
+        endpoints = calibration.boundary_segment(first, second).astype(np.float64)
+        direction = endpoints[1] - endpoints[0]
+        endpoints[0] += trim_fraction * direction
+        endpoints[1] -= trim_fraction * direction
+        direction = endpoints[1] - endpoints[0]
+        length = float(np.linalg.norm(direction))
+        if length <= 0.0:
+            raise ValueError("wall sample became empty after trimming")
+        tangent = direction / length
+        normal = np.asarray((-tangent[1], tangent[0]), dtype=np.float64)
+        sample_count = max(2, int(round(length)) + 1)
+        along = np.linspace(0.0, 1.0, sample_count)[:, None]
+        centre_line = endpoints[0] + along * direction
+
+        best = (0.0, 0.0, 0.0, 0)
+        kernel = np.ones((1, close_pixels), dtype=np.uint8)
+        for offset in range(-search_pixels, search_pixels + 1):
+            signal = np.zeros(sample_count, dtype=bool)
+            for band_offset in range(-band_half_width, band_half_width + 1):
+                samples = centre_line + (offset + band_offset) * normal
+                x = np.rint(samples[:, 0]).astype(np.int32)
+                y = np.rint(samples[:, 1]).astype(np.int32)
+                valid = (
+                    (x >= 0)
+                    & (x < mask.shape[1])
+                    & (y >= 0)
+                    & (y < mask.shape[0])
+                )
+                signal[valid] |= mask[y[valid], x[valid]] > 0
+
+            signal = cv2.morphologyEx(
+                signal.astype(np.uint8).reshape(1, -1),
+                cv2.MORPH_CLOSE,
+                kernel,
+            ).ravel() > 0
+            coverage = float(np.mean(signal))
+            longest_run = float(_longest_true_run(signal)) / float(signal.size)
+            score = 0.65 * coverage + 0.35 * longest_run
+            candidate = (score, coverage, longest_run, offset)
+            if candidate > best:
+                best = candidate
+
+        score, coverage, longest_run, offset = best
+        return WallEvidence(
+            blocked=score >= blocked_score,
+            uncertain=open_score < score < blocked_score,
+            score=score,
+            coverage=coverage,
+            longest_run=longest_run,
+            offset_pixels=offset,
+        )
+
     if vertical_boundary:
         mask = vertical_evidence
         fixed = calibration.x_edges[max(column, next_column)]
@@ -1012,6 +1152,81 @@ def draw_normal_maze_map(
     return display
 
 
+def draw_available_normal_graph(
+    image_bgr: np.ndarray,
+    normal_map: NormalMazeMap,
+    show_labels: bool = True,
+) -> np.ndarray:
+    """Clearly show every available normal-maze node and traversable edge.
+
+    Green lines are graph edges the normal planner may traverse. Green nodes
+    are active cells, cyan/purple nodes are the continuous-region portals, and
+    the excluded continuous white-space cells are shaded grey.
+    """
+    display = cv2.addWeighted(
+        image_bgr,
+        0.38,
+        np.full_like(image_bgr, 245),
+        0.62,
+        0.0,
+    )
+
+    excluded_layer = display.copy()
+    for cell in normal_map.excluded_cells:
+        cv2.fillConvexPoly(
+            excluded_layer,
+            np.rint(normal_map.calibration.cell_quad(cell)).astype(np.int32),
+            (105, 105, 105),
+            cv2.LINE_AA,
+        )
+    display = cv2.addWeighted(display, 0.48, excluded_layer, 0.52, 0.0)
+
+    for cell, neighbours in normal_map.graph.items():
+        for neighbour in neighbours:
+            if cell < neighbour:
+                cv2.line(
+                    display,
+                    normal_map.calibration.centre(cell),
+                    normal_map.calibration.centre(neighbour),
+                    (40, 175, 40),
+                    3,
+                    cv2.LINE_AA,
+                )
+
+    portal_colours = {
+        normal_map.entrance.inside_cell: (255, 200, 0),
+        normal_map.exit.inside_cell: (210, 60, 190),
+    }
+    for cell in normal_map.graph:
+        centre = normal_map.calibration.centre(cell)
+        colour = portal_colours.get(cell, (0, 150, 0))
+        cv2.circle(display, centre, 5, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(display, centre, 4, colour, -1, cv2.LINE_AA)
+        if show_labels:
+            label = f"{cell[0]},{cell[1]}"
+            cv2.putText(
+                display,
+                label,
+                (centre[0] + 5, centre[1] - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.27,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                display,
+                label,
+                (centre[0] + 5, centre[1] - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.27,
+                (20, 20, 20),
+                1,
+                cv2.LINE_AA,
+            )
+    return display
+
+
 def draw_normal_wall_diagnostics(
     image_bgr: np.ndarray,
     normal_map: NormalMazeMap,
@@ -1031,22 +1246,12 @@ def draw_normal_wall_diagnostics(
         if not evidence.blocked:
             continue
         first, second = tuple(edge)
-        row, column = first
-        next_row, next_column = second
-        if row == next_row:
-            fixed = calibration.x_edges[max(column, next_column)]
-            segment_start = calibration.y_edges[row]
-            segment_end = calibration.y_edges[row + 1]
-            trim = trim_fraction * (segment_end - segment_start)
-            start = (int(round(fixed)), int(round(segment_start + trim)))
-            end = (int(round(fixed)), int(round(segment_end - trim)))
-        else:
-            fixed = calibration.y_edges[max(row, next_row)]
-            segment_start = calibration.x_edges[column]
-            segment_end = calibration.x_edges[column + 1]
-            trim = trim_fraction * (segment_end - segment_start)
-            start = (int(round(segment_start + trim)), int(round(fixed)))
-            end = (int(round(segment_end - trim)), int(round(fixed)))
+        segment = calibration.boundary_segment(first, second).astype(np.float64)
+        direction = segment[1] - segment[0]
+        start_array = segment[0] + trim_fraction * direction
+        end_array = segment[1] - trim_fraction * direction
+        start = tuple(np.rint(start_array).astype(int))
+        end = tuple(np.rint(end_array).astype(int))
 
         cv2.line(
             display,

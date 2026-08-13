@@ -14,7 +14,11 @@ import numpy as np
 
 from mazemapping.mask_maze import create_maze_masks
 
-from .task2_pipeline import project_points_to_original, rectify_course
+from .task2_pipeline import (
+    course_rectification_transform,
+    project_points_to_original,
+    rectify_course,
+)
 from .two_map_planner import (
     GridCalibration,
     Portal,
@@ -23,6 +27,7 @@ from .two_map_planner import (
     build_obstacle_map,
     draw_normal_maze_map,
     draw_obstacle_map,
+    make_clip_grid_calibration,
     make_grid_calibration,
     plan_two_map_route,
 )
@@ -52,7 +57,7 @@ class DemoConfig:
     # the robot is commanded to drive 1000 mm.
     obstacle_distance_scale: float = 1000.0 / 1018.2
     rrt_max_waypoint_spacing_mm: float = 150.0
-    endpoint_clear_radius_pixels: int = 25
+    grid_from_clips: bool = True
 
 
 @dataclass
@@ -77,6 +82,7 @@ class MappingPreview:
     task1_masks: dict[str, np.ndarray]
     calibration: GridCalibration
     coordinate_grid_bgr: np.ndarray
+    clip_grid_result: Optional[object] = None
 
 
 def default_unavailable_cells() -> set[Cell]:
@@ -97,22 +103,22 @@ def draw_coordinate_grid(
     display = rectified_bgr.copy()
     unavailable = default_unavailable_cells()
 
-    for x in calibration.x_edges:
-        x_pixel = int(round(x))
+    for column in range(calibration.columns + 1):
+        endpoints = calibration.project(((column, 0), (column, calibration.rows)))
         cv2.line(
             display,
-            (x_pixel, int(round(calibration.y_edges[0]))),
-            (x_pixel, int(round(calibration.y_edges[-1]))),
+            tuple(np.rint(endpoints[0]).astype(int)),
+            tuple(np.rint(endpoints[1]).astype(int)),
             (255, 180, 0),
             1,
             cv2.LINE_AA,
         )
-    for y in calibration.y_edges:
-        y_pixel = int(round(y))
+    for row in range(calibration.rows + 1):
+        endpoints = calibration.project(((0, row), (calibration.columns, row)))
         cv2.line(
             display,
-            (int(round(calibration.x_edges[0])), y_pixel),
-            (int(round(calibration.x_edges[-1])), y_pixel),
+            tuple(np.rint(endpoints[0]).astype(int)),
+            tuple(np.rint(endpoints[1]).astype(int)),
             (255, 180, 0),
             1,
             cv2.LINE_AA,
@@ -120,19 +126,11 @@ def draw_coordinate_grid(
 
     overlay = display.copy()
     for cell in unavailable:
-        row, column = cell
-        cv2.rectangle(
+        cv2.fillConvexPoly(
             overlay,
-            (
-                int(round(calibration.x_edges[column])),
-                int(round(calibration.y_edges[row])),
-            ),
-            (
-                int(round(calibration.x_edges[column + 1])),
-                int(round(calibration.y_edges[row + 1])),
-            ),
+            np.rint(calibration.cell_quad(cell)).astype(np.int32),
             (35, 35, 35),
-            -1,
+            cv2.LINE_AA,
         )
     display = cv2.addWeighted(display, 0.72, overlay, 0.28, 0.0)
 
@@ -195,13 +193,32 @@ def prepare_mapping_preview(config: DemoConfig) -> MappingPreview:
         )
         for name, output in source_task1_masks.items()
     }
-    calibration = make_grid_calibration(*config.grid_bounds)
+    clip_grid_result = None
+    if config.grid_from_clips:
+        image_transform = course_rectification_transform(
+            source.shape,
+            config.output_pixels,
+            config.board_corners,
+        )
+        top, left = config.obstacle_top_left
+        calibration, clip_grid_result = make_clip_grid_calibration(
+            source,
+            rows=9,
+            columns=9,
+            image_transform=image_transform,
+            excluded_logical_regions=(
+                (top, left, config.obstacle_size, config.obstacle_size),
+            ),
+        )
+    else:
+        calibration = make_grid_calibration(*config.grid_bounds)
     return MappingPreview(
         source_bgr=source,
         rectified_bgr=rectified,
         task1_masks=task1_masks,
         calibration=calibration,
         coordinate_grid_bgr=draw_coordinate_grid(rectified, calibration),
+        clip_grid_result=clip_grid_result,
     )
 
 
@@ -216,8 +233,6 @@ def run_two_map_demo(
     rectified = preview.rectified_bgr
     task1_masks = preview.task1_masks
     calibration = preview.calibration
-    start_point = calibration.centre(config.start)
-    goal_point = calibration.centre(config.goal)
     normal_map = build_normal_maze_map(
         task1_masks,
         calibration,
@@ -226,10 +241,6 @@ def run_two_map_demo(
         config.entrance,
         config.exit,
         unavailable_cells=default_unavailable_cells(),
-        endpoint_clearings=(
-            (start_point, config.endpoint_clear_radius_pixels),
-            (goal_point, config.endpoint_clear_radius_pixels),
-        ),
     )
     obstacle_map = build_obstacle_map(
         rectified,

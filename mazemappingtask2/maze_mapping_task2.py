@@ -42,10 +42,12 @@ from mazemappingtask2 import (
     Portal,
     build_normal_maze_map,
     build_obstacle_map,
+    course_rectification_transform,
     default_unavailable_cells,
     draw_coordinate_grid,
     draw_normal_maze_map,
     draw_obstacle_map,
+    make_clip_grid_calibration,
     make_grid_calibration,
     plan_two_map_route,
 )
@@ -63,6 +65,7 @@ Point = Tuple[int, int]
 OUTPUT_PIXELS = 324
 BOARD_CORNERS = None  # Optional order: top-left, top-right, bottom-right, bottom-left.
 GRID_BOUNDS = (29.0, 27.0, 299.0, 297.0)  # left, top, right, bottom after rectification.
+GRID_FROM_CLIPS = True
 
 OBSTACLE_TOP_LEFT: Cell = (0, 2)
 OBSTACLE_SIZE = 5
@@ -82,7 +85,6 @@ SAFETY_MARGIN_MM = 5.0
 OBSTACLE_RESOLUTION_MM = 5.0
 OBSTACLE_DISTANCE_SCALE = 0.97
 RRT_MAX_WAYPOINT_SPACING_MM = 150.0
-ENDPOINT_CLEAR_RADIUS_PIXELS = 25
 
 # Use the exact Task 1 defaults. Masking is performed on the original image
 # before rectification, matching a direct mask_maze.py invocation.
@@ -117,7 +119,7 @@ def make_config(image_file: Path) -> DemoConfig:
         obstacle_resolution_mm=OBSTACLE_RESOLUTION_MM,
         obstacle_distance_scale=OBSTACLE_DISTANCE_SCALE,
         rrt_max_waypoint_spacing_mm=RRT_MAX_WAYPOINT_SPACING_MM,
-        endpoint_clear_radius_pixels=ENDPOINT_CLEAR_RADIUS_PIXELS,
+        grid_from_clips=GRID_FROM_CLIPS,
     )
 
 
@@ -155,13 +157,32 @@ def prepare_input(
         )
         for name, output in source_task1_masks.items()
     }
-    calibration = make_grid_calibration(*config.grid_bounds)
+    clip_grid_result = None
+    if config.grid_from_clips:
+        image_transform = course_rectification_transform(
+            source.shape,
+            config.output_pixels,
+            config.board_corners,
+        )
+        top, left = config.obstacle_top_left
+        calibration, clip_grid_result = make_clip_grid_calibration(
+            source,
+            rows=9,
+            columns=9,
+            image_transform=image_transform,
+            excluded_logical_regions=(
+                (top, left, config.obstacle_size, config.obstacle_size),
+            ),
+        )
+    else:
+        calibration = make_grid_calibration(*config.grid_bounds)
     return MappingPreview(
         source_bgr=source,
         rectified_bgr=rectified,
         task1_masks=task1_masks,
         calibration=calibration,
         coordinate_grid_bgr=draw_coordinate_grid(rectified, calibration),
+        clip_grid_result=clip_grid_result,
     )
 
 
@@ -172,26 +193,13 @@ def _wall_segment(
 ) -> Tuple[Point, Point]:
     """Return the nominal shared cell boundary drawn by the wall diagnostic."""
     first, second = tuple(edge)
-    row, column = first
-    next_row, next_column = second
-
-    if row == next_row:
-        fixed = calibration.x_edges[max(column, next_column)]
-        segment_start = calibration.y_edges[row]
-        segment_end = calibration.y_edges[row + 1]
-        trim = trim_fraction * (segment_end - segment_start)
-        return (
-            (int(round(fixed)), int(round(segment_start + trim))),
-            (int(round(fixed)), int(round(segment_end - trim))),
-        )
-
-    fixed = calibration.y_edges[max(row, next_row)]
-    segment_start = calibration.x_edges[column]
-    segment_end = calibration.x_edges[column + 1]
-    trim = trim_fraction * (segment_end - segment_start)
+    segment = calibration.boundary_segment(first, second).astype(np.float64)
+    direction = segment[1] - segment[0]
+    start = segment[0] + trim_fraction * direction
+    end = segment[1] - trim_fraction * direction
     return (
-        (int(round(segment_start + trim)), int(round(fixed))),
-        (int(round(segment_end - trim)), int(round(fixed))),
+        tuple(np.rint(start).astype(int)),
+        tuple(np.rint(end).astype(int)),
     )
 
 
@@ -449,6 +457,15 @@ def run(
         f"dark threshold={dark_threshold}, "
         f"thin-line threshold={thin_line_threshold}, gamma={gamma:.2f}"
     )
+    if mapping_preview.clip_grid_result is not None:
+        result = mapping_preview.clip_grid_result
+        print(
+            "Clip-derived normal grid: "
+            f"{len(result.clip_centres)} detections, "
+            f"{result.inlier_count} inliers, "
+            f"{result.median_fit_error:.2f}px median error "
+            "(continuous white-space region excluded)"
+        )
     show_task1_mask(mapping_preview, show, output_directory)
 
     normal_map = build_normal_maze_map(
@@ -459,16 +476,6 @@ def run(
         config.entrance,
         config.exit,
         unavailable_cells=default_unavailable_cells(),
-        endpoint_clearings=(
-            (
-                mapping_preview.calibration.centre(config.start),
-                config.endpoint_clear_radius_pixels,
-            ),
-            (
-                mapping_preview.calibration.centre(config.goal),
-                config.endpoint_clear_radius_pixels,
-            ),
-        ),
     )
     wall_view = draw_blocked_wall_outlines(
         mapping_preview.rectified_bgr,

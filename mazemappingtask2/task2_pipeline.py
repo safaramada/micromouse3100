@@ -198,26 +198,20 @@ class CardinalMazePlanner(ContinuousPlanner):
         return waypoints
 
 
-def rectify_course(
-    image_bgr: np.ndarray,
+def course_rectification_transform(
+    image_shape: Sequence[int],
     output_pixels: int,
     board_corners: Optional[Sequence[Sequence[float]]] = None,
-    interpolation: int = cv2.INTER_AREA,
 ) -> np.ndarray:
-    """Return a square, top-down view of the complete 9 x 9 maze.
-
-    ``board_corners`` must be ordered top-left, top-right, bottom-right,
-    bottom-left in the original image.  When it is ``None``, the complete
-    input image is used.  For marking, measure these four points once for the
-    fixed camera setup rather than tuning them after each photograph. The
-    obstacle-course region remains part of this same rectified image.
-    """
-    if image_bgr is None or image_bgr.size == 0:
-        raise ValueError("the supplied course image is empty")
+    """Return the homography from camera pixels to the square course view."""
+    if len(image_shape) < 2:
+        raise ValueError("image_shape must contain height and width")
+    height, width = map(int, image_shape[:2])
+    if min(height, width) < 2:
+        raise ValueError("image dimensions must be at least 2 pixels")
     if output_pixels < 2:
         raise ValueError("output_pixels must be at least 2")
 
-    height, width = image_bgr.shape[:2]
     if board_corners is None:
         source = np.array(
             [
@@ -240,10 +234,35 @@ def rectify_course(
         [[0.0, 0.0], [maximum, 0.0], [maximum, maximum], [0.0, maximum]],
         dtype=np.float32,
     )
+    return cv2.getPerspectiveTransform(source, destination)
+
+
+def rectify_course(
+    image_bgr: np.ndarray,
+    output_pixels: int,
+    board_corners: Optional[Sequence[Sequence[float]]] = None,
+    interpolation: int = cv2.INTER_AREA,
+) -> np.ndarray:
+    """Return a square, top-down view of the complete 9 x 9 maze.
+
+    ``board_corners`` must be ordered top-left, top-right, bottom-right,
+    bottom-left in the original image.  When it is ``None``, the complete
+    input image is used.  For marking, measure these four points once for the
+    fixed camera setup rather than tuning them after each photograph. The
+    obstacle-course region remains part of this same rectified image.
+    """
+    if image_bgr is None or image_bgr.size == 0:
+        raise ValueError("the supplied course image is empty")
+    if output_pixels < 2:
+        raise ValueError("output_pixels must be at least 2")
 
     # AI-assisted implementation: perspective calibration of the hard-coded
     # full maze, including its hard-coded 5 x 5 obstacle-course region.
-    transform = cv2.getPerspectiveTransform(source, destination)
+    transform = course_rectification_transform(
+        image_bgr.shape,
+        output_pixels,
+        board_corners,
+    )
     return cv2.warpPerspective(
         image_bgr,
         transform,

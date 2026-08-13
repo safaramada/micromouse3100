@@ -14,14 +14,16 @@ It does **not** plan all three stages on one noisy pixel occupancy image.
 
 ```python
 from mazemapping.mask_maze import create_maze_masks
-task1_masks = create_maze_masks(rectified_image)
+task1_masks = create_maze_masks(original_camera_image)
 ```
 
-The normal planner samples the expected horizontal and vertical cell
-boundaries from those Task 1 masks and builds a discrete 9 x 9 cell graph.
-The configured 5 x 5 obstacle interior is removed from this graph, except for
-the two inside portal cells. The only permitted crossings are the programmed
-entrance and exit.
+The normal planner detects the cyan wall clips at full camera resolution,
+fits the same perspective-aware homography used by Task 1, and samples the
+horizontal and vertical cell boundaries from those Task 1 masks. Clip
+observations strictly inside the configured continuous white-space region are
+excluded from the fit. The resulting discrete 9 x 9 cell graph also removes
+that 5 x 5 interior, except for the two inside portal cells.
+The only permitted crossings are the programmed entrance and exit.
 
 The normal graph is solved with a heading-aware shortest-path search. Commands
 are generated directly from its logical cell path:
@@ -87,15 +89,17 @@ Change the input image in the notebook's **Phase 1** cell:
 IMAGE_FILE=TASK2_DIR / 'maze2.png'
 ```
 
-Phase 1 also contains the fixed-camera grid calibration. Phase 2 contains the
+Phase 1 enables the cyan-clip grid calibration by default; set
+`GRID_FROM_CLIPS = False` to use the old fixed `GRID_BOUNDS` fallback. Phase 2 contains the
 5 x 5 location, programmed entrance/exit, start/goal cells, optional goal
 heading, and measured robot radius. Full-maze coordinates use `(row, column)`
 from the top-left. Motion
 headings are Cartesian: east `0`, north `90`, west `180`, south `-90`.
 
-For a different fixed camera, calibrate `board_corners` and `grid_bounds` once
-before assessment. Measure `robot_radius_mm` from the robot centre to its
-furthest corner rather than retaining the example value.
+For a different fixed camera, calibrate `board_corners` once before assessment.
+`grid_bounds` is only needed by the fixed-grid fallback. Measure
+`robot_radius_mm` from the robot centre to its furthest corner rather than
+retaining the example value.
 
 ## Main files
 
@@ -105,6 +109,8 @@ furthest corner rather than retaining the example value.
   coordinate transforms, and drawing.
 - `task2_pipeline.py` - older shared rectification/projection utilities; its
   previous one-map hybrid planner is not used by the new notebook.
+- `../mazemapping/clip_grid.py` - cyan-clip detection and perspective-aware
+  logical-grid fitting shared with Task 1.
 
 Generative AI disclosure: OpenAI Codex assisted with the implementation and
 tests. AI-assisted source sections are identified with inline comments.

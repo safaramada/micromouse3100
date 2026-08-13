@@ -45,7 +45,9 @@ GAMMA = 1.21
 
 # Threshold applied to the black-hat response used for thin-wall recovery.
 # Lower it if thin walls are missing; raise it if too many fine details appear.
-THIN_LINE_THRESHOLD = 18
+# THIN_LINE_THRESHOLD = 18
+THIN_LINE_THRESHOLD = 22
+
 
 # Black-hat kernels for detecting horizontal and vertical dark lines.
 HORIZONTAL_BLACKHAT_KERNEL = (17, 3)
@@ -70,7 +72,9 @@ MIN_THIN_COMPONENT_AREA = 8
 # This removes thin-line-only detections on those seams while preserving any
 # genuinely dark wall pixels found by the main threshold.
 SUPPRESS_CENTRE_SEAMS = True
-CENTRE_SEAM_HALF_WIDTH = 7
+# CENTRE_SEAM_HALF_WIDTH = 7
+CENTRE_SEAM_HALF_WIDTH = 8
+
 
 # Adds a narrow obstacle boundary around the octagonal board.
 BOARD_BOUNDARY_WIDTH = 7
