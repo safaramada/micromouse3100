@@ -53,6 +53,17 @@ public:
         yaw_zero_deg = yaw_deg;
     }
 
+    // Re-measure stationary gyro bias without changing the accumulated yaw.
+    // Call only while the chassis is stopped. Resetting the integration clock
+    // prevents the calibration delay from appearing as one very large sample.
+    void recalibrateGyroBias() {
+        calibrateGyro();
+        gyro_z_dps = 0;
+        dt = 0;
+        curr_time = micros();
+        prev_time = curr_time;
+    }
+
     float getYawDeg() {
         return wrapAngleDeg(yaw_deg - yaw_zero_deg);
     }

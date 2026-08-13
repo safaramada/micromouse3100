@@ -51,13 +51,12 @@ Robot robot(
 // StraightLineTracking straightLineTask(robot);
 // Turning turningTask(robot);
 
-const char command_string[] = "rfffrf,[(-45.0,145.8),(0.0,138.9),(0.0,145.8),(0.0,138.9),(0.0,145.8),(0.0,138.9),(0.0,145.8),(45.0,0.0)],frf";
+// const char command_string[] = "rfffrf,[(-45.0,145.8),(0.0,138.9),(0.0,145.8),(0.0,138.9),(0.0,145.8),(0.0,138.9),(0.0,145.8),(45.0,0.0)],frf";
+ const char command_string[] = "rfffrf,[(-45.0,144.0),(0.0,137.2),(0.0,144.0),(0.0,137.2),(0.0,144.0),(0.0,137.2),(0.0,144.0),(45.0,0.0)],frf";
 
 // const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
 // const char command_string[] =
 // "[(-45.0,10.0), (-45.0,10.0), (-45.0,10.0), (-45.0,10.0)]";
-
-
 
 bool i2cDevicePresent(uint8_t address) {
     Wire.beginTransmission(address);

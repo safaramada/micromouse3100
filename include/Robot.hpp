@@ -155,6 +155,12 @@ public:
         command_pause_active = false;
         base_pwm = constrain(abs(pwm), 80, 180);
 
+        // This is the intended heading, accumulated from the command stream.
+        // Unlike target_yaw_deg = imu.getYawDeg() at every segment, it does
+        // not accept a residual turn error as the new desired direction.
+        planned_yaw_deg = imu.getYawDeg();
+        target_yaw_deg = planned_yaw_deg;
+
         stopMotors();
         resetSideLidarAvoidanceState();
     }
@@ -496,7 +502,7 @@ private:
 
             target_distance_mm =
                 maze_cell_distance_mm * active_forward_command_count;
-            target_yaw_deg = imu.getYawDeg();
+            target_yaw_deg = planned_yaw_deg;
 
             heading_pid.reset();
             resetSideLidarAvoidanceState();
@@ -504,16 +510,41 @@ private:
         }
 
         else if (command == 'l' || command == 'L') {
-            target_yaw_deg =
-                IMU::wrapAngleDeg(imu.getYawDeg() + 90.0);
+            planned_yaw_deg =
+                IMU::wrapAngleDeg(planned_yaw_deg + 90.0f);
+            target_yaw_deg = planned_yaw_deg;
 
             beginTurnController();
             command_state = COMMAND_TURN;
         }
 
         else if (command == 'r' || command == 'R') {
-            target_yaw_deg =
-                IMU::wrapAngleDeg(imu.getYawDeg() - 90.0);
+            planned_yaw_deg =
+                IMU::wrapAngleDeg(planned_yaw_deg - 90.0f);
+            target_yaw_deg = planned_yaw_deg;
+
+            beginTurnController();
+            command_state = COMMAND_TURN;
+        }
+        else if (command == '[') {
+            // '[' marks entry into the continuous/cylinder section. Stop long
+            // enough for chassis motion to die away, recalibrate gyro bias,
+            // then recover the exact heading intended by the preceding maze
+            // commands before parsing the first angled tuple.
+            stopMotors();
+            unsigned long settle_start_ms = millis();
+            while (millis() - settle_start_ms < entry_heading_settle_time_ms) {
+                // Continue integrating any final coast after motor shutdown;
+                // otherwise that small rotation would be lost when the bias
+                // calibration resets the IMU integration timestamp.
+                imu.update();
+                delay(2);
+            }
+            imu.recalibrateGyroBias();
+
+            target_yaw_deg = planned_yaw_deg;
+            Serial.print(F("Cylinder entry heading checkpoint: "));
+            Serial.println(target_yaw_deg);
 
             beginTurnController();
             command_state = COMMAND_TURN;
@@ -590,6 +621,11 @@ private:
             distance_end - command_string + 1
         );
 
+        planned_yaw_deg = IMU::wrapAngleDeg(
+            planned_yaw_deg + custom_angle_deg
+        );
+        target_yaw_deg = planned_yaw_deg;
+
         Serial.print(F("Custom command: turn "));
         Serial.print(custom_angle_deg);
         Serial.print(F(" deg, drive "));
@@ -597,10 +633,6 @@ private:
         Serial.println(F(" mm"));
 
         if (fabs(custom_angle_deg) > custom_angle_tolerance_deg) {
-            target_yaw_deg = IMU::wrapAngleDeg(
-                imu.getYawDeg() + custom_angle_deg
-            );
-
             beginTurnController();
             command_state = COMMAND_CUSTOM_TURN;
             return;
@@ -619,7 +651,7 @@ private:
         start_right_rotation = right_encoder.getRotation();
 
         target_distance_mm = custom_distance_mm;
-        target_yaw_deg = imu.getYawDeg();
+        target_yaw_deg = planned_yaw_deg;
 
         heading_pid.reset();
         resetSideLidarAvoidanceState();
@@ -1045,6 +1077,7 @@ private:
     float target_distance_mm = 0;
     // float target_wall_distance_mm = 100;
     float target_yaw_deg = 0;
+    float planned_yaw_deg = 0;
     float start_left_rotation = 0;
     float start_right_rotation = 0;
     // float wall_tolerance_mm = 5;
@@ -1106,6 +1139,7 @@ private:
     bool command_pause_active = false;
     unsigned long command_pause_start_ms = 0;
     const unsigned long command_pause_time_ms = 80;
+    const unsigned long entry_heading_settle_time_ms = 300;
     const float maze_cell_distance_mm = 180.0;
 
 };
