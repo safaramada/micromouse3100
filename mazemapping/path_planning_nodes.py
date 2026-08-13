@@ -221,11 +221,17 @@ def generate_fixed_grid_nodes(
 
             inside_image = 0 <= x < width and 0 <= y < height
             inside_board = inside_image and board_mask[y, x] == 255
+            is_cut_off_corner = (
+                row in (0, rows - 1)
+                and column in (0, columns - 1)
+            )
 
             # A node is blocked when it is outside the playable board or when
-            # its coordinate lies on a black obstacle pixel.
+            # its coordinate lies on a black obstacle pixel. The four logical
+            # corners are also unusable on the octagonal maze board.
             blocked = (
-                not inside_board
+                is_cut_off_corner
+                or not inside_board
                 or planning_map[y, x] != 255
             )
 
@@ -274,8 +280,13 @@ def generate_nodes_from_positions(
 
         inside_image = 0 <= x < width and 0 <= y < height
         inside_board = inside_image and board_mask[y, x] == 255
+        is_cut_off_corner = (
+            row in (0, rows - 1)
+            and column in (0, columns - 1)
+        )
         blocked = (
-            not inside_board
+            is_cut_off_corner
+            or not inside_board
             or planning_map[y, x] != 255
         )
 
