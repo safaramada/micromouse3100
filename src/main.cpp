@@ -52,7 +52,7 @@ Robot robot(
 // Turning turningTask(robot);
 
 // const char command_string[] = "rfffrf,[(-45.0,145.8),(0.0,138.9),(0.0,145.8),(0.0,138.9),(0.0,145.8),(0.0,138.9),(0.0,145.8),(45.0,0.0)],frf";
- const char command_string[] = "rfffrf,[(-45.0,144.0),(0.0,137.2),(0.0,144.0),(0.0,137.2),(0.0,144.0),(0.0,137.2),(0.0,144.0),(45.0,0.0)],frf";
+ const char command_string[] = "ffffrfrflf,[(22.2,115.3),(-0.9,119.8),(0.0,119.8),(0.9,115.3),(11.4,104.9),(0.0,104.9),(0.0,104.9),(-33.7,0.0)],frffff";
 
 // const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
 // const char command_string[] =

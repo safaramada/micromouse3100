@@ -202,6 +202,7 @@ def rectify_course(
     image_bgr: np.ndarray,
     output_pixels: int,
     board_corners: Optional[Sequence[Sequence[float]]] = None,
+    interpolation: int = cv2.INTER_AREA,
 ) -> np.ndarray:
     """Return a square, top-down view of the complete 9 x 9 maze.
 
@@ -247,7 +248,7 @@ def rectify_course(
         image_bgr,
         transform,
         (output_pixels, output_pixels),
-        flags=cv2.INTER_AREA,
+        flags=interpolation,
         borderMode=cv2.BORDER_REPLICATE,
     )
 

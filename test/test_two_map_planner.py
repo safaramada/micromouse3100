@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 from pathlib import Path
 import re
@@ -12,6 +14,7 @@ from mazemappingtask2 import (
     Portal,
     build_normal_maze_map,
     build_obstacle_map,
+    draw_normal_wall_diagnostics,
     encode_cardinal_turn,
     encode_cell_path,
     make_grid_calibration,
@@ -183,6 +186,59 @@ class TwoMapPlannerTests(unittest.TestCase):
                     abs(neighbour[0] - cell[0]) + abs(neighbour[1] - cell[1]),
                     1,
                 )
+
+    def test_normal_wall_diagnostic_draws_graph_decisions(self) -> None:
+        masks = self._blank_task1_masks(90)
+        cv2.line(
+            masks["02c_vertical_line_mask.png"],
+            (10, 70),
+            (10, 80),
+            255,
+            3,
+        )
+        calibration = make_grid_calibration(0, 0, 90, 90)
+        normal_map = build_normal_maze_map(
+            masks,
+            calibration,
+            obstacle_top_left=(2, 2),
+            obstacle_size=5,
+            entrance=Portal((7, 4), (6, 4)),
+            exit=Portal((1, 4), (2, 4)),
+        )
+
+        diagnostic = draw_normal_wall_diagnostics(
+            np.full((90, 90, 3), 240, dtype=np.uint8),
+            normal_map,
+        )
+
+        np.testing.assert_array_equal(diagnostic[75, 10], (0, 0, 255))
+        np.testing.assert_array_equal(diagnostic[85, 10], (240, 240, 240))
+        np.testing.assert_array_equal(diagnostic[70, 45], (240, 240, 240))
+
+    def test_borderline_wall_evidence_remains_traversable(self) -> None:
+        masks = self._blank_task1_masks(90)
+        # Two pixels across this sampled boundary produce a borderline score:
+        # retain the metadata, but do not create a graph wall.
+        cv2.line(
+            masks["02c_vertical_line_mask.png"],
+            (10, 72),
+            (10, 73),
+            255,
+            1,
+        )
+        normal_map = build_normal_maze_map(
+            masks,
+            make_grid_calibration(0, 0, 90, 90),
+            obstacle_top_left=(2, 2),
+            obstacle_size=5,
+            entrance=Portal((7, 4), (6, 4)),
+            exit=Portal((1, 4), (2, 4)),
+        )
+        edge = frozenset(((7, 0), (7, 1)))
+
+        self.assertTrue(normal_map.walls[edge].uncertain)
+        self.assertFalse(normal_map.walls[edge].blocked)
+        self.assertIn((7, 1), normal_map.graph[(7, 0)])
 
     def test_obstacle_crop_is_independent_and_detects_only_inside_cylinder(self) -> None:
         _, _, obstacle_map = self._synthetic_maps()

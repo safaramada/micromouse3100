@@ -432,7 +432,9 @@ def wall_evidence_between(
     score, coverage, longest_run, offset = best
     uncertain = open_score < score < blocked_score
     return WallEvidence(
-        blocked=score >= blocked_score or uncertain,
+        # Borderline evidence is traversable. Only a confident score creates
+        # a graph wall; there is no separate "uncertain wall" category.
+        blocked=score >= blocked_score,
         uncertain=uncertain,
         score=score,
         coverage=coverage,
@@ -1007,6 +1009,54 @@ def draw_normal_maze_map(
                 3,
                 cv2.LINE_AA,
             )
+    return display
+
+
+def draw_normal_wall_diagnostics(
+    image_bgr: np.ndarray,
+    normal_map: NormalMazeMap,
+    line_thickness: int = 3,
+) -> np.ndarray:
+    """Draw only confidently blocked normal-graph boundaries in red."""
+    if line_thickness <= 0:
+        raise ValueError("line_thickness must be positive")
+
+    display = image_bgr.copy()
+    calibration = normal_map.calibration
+
+    # Match wall_evidence_between(): leave the ends of each boundary out so
+    # neighbouring coloured decisions remain visually distinct at junctions.
+    trim_fraction = 0.14
+    for edge, evidence in normal_map.walls.items():
+        if not evidence.blocked:
+            continue
+        first, second = tuple(edge)
+        row, column = first
+        next_row, next_column = second
+        if row == next_row:
+            fixed = calibration.x_edges[max(column, next_column)]
+            segment_start = calibration.y_edges[row]
+            segment_end = calibration.y_edges[row + 1]
+            trim = trim_fraction * (segment_end - segment_start)
+            start = (int(round(fixed)), int(round(segment_start + trim)))
+            end = (int(round(fixed)), int(round(segment_end - trim)))
+        else:
+            fixed = calibration.y_edges[max(row, next_row)]
+            segment_start = calibration.x_edges[column]
+            segment_end = calibration.x_edges[column + 1]
+            trim = trim_fraction * (segment_end - segment_start)
+            start = (int(round(segment_start + trim)), int(round(fixed)))
+            end = (int(round(segment_end - trim)), int(round(fixed)))
+
+        cv2.line(
+            display,
+            start,
+            end,
+            (0, 0, 255),
+            line_thickness,
+            cv2.LINE_AA,
+        )
+
     return display
 
 

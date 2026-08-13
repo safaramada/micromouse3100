@@ -174,16 +174,27 @@ def draw_coordinate_grid(
 
 
 def prepare_mapping_preview(config: DemoConfig) -> MappingPreview:
-    """Load, rectify, mask, and label the grid without planning a route."""
+    """Mask the source photo, rectify its masks, and label the planning grid."""
     source = cv2.imread(str(config.image_file), cv2.IMREAD_COLOR)
     if source is None:
         raise FileNotFoundError(f"Could not load maze image: {config.image_file}")
+    source_task1_masks = create_maze_masks(source)
     rectified = rectify_course(
         source,
         config.output_pixels,
         config.board_corners,
     )
-    task1_masks = create_maze_masks(rectified)
+    task1_masks = {
+        name: rectify_course(
+            output,
+            config.output_pixels,
+            config.board_corners,
+            interpolation=(
+                cv2.INTER_NEAREST if output.ndim == 2 else cv2.INTER_AREA
+            ),
+        )
+        for name, output in source_task1_masks.items()
+    }
     calibration = make_grid_calibration(*config.grid_bounds)
     return MappingPreview(
         source_bgr=source,
@@ -194,8 +205,13 @@ def prepare_mapping_preview(config: DemoConfig) -> MappingPreview:
     )
 
 
-def run_two_map_demo(config: DemoConfig) -> DemoOutput:
-    preview = prepare_mapping_preview(config)
+def run_two_map_demo(
+    config: DemoConfig,
+    preview: Optional[MappingPreview] = None,
+) -> DemoOutput:
+    """Plan from a prepared Task 1 mask, or prepare it when not supplied."""
+    if preview is None:
+        preview = prepare_mapping_preview(config)
     source = preview.source_bgr
     rectified = preview.rectified_bgr
     task1_masks = preview.task1_masks
