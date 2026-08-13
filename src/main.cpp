@@ -51,10 +51,10 @@ Robot robot(
 // StraightLineTracking straightLineTask(robot);
 // Turning turningTask(robot);
 
-// const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
+const char command_string[] = "rfffrf,[(-45.0,1000.0),(45.0,0.0)],frf";
 // const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
-const char command_string[] =
-"f,(90.0,90.0),(6.5,43.8),(-70.0,910.7),(-26.5,90.0),(90.0,180.0),(-90.0,360.0)]";
+// const char command_string[] =
+// "[(-45.0,10.0), (-45.0,10.0), (-45.0,10.0), (-45.0,10.0)]";
 
 
 

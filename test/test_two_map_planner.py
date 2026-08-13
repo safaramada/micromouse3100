@@ -16,6 +16,7 @@ from mazemappingtask2 import (
     encode_cell_path,
     make_grid_calibration,
     plan_two_map_route,
+    prepare_mapping_preview,
     run_two_map_demo,
     transform_points,
 )
@@ -287,6 +288,63 @@ class TwoMapPlannerTests(unittest.TestCase):
             "the synthetic obstacle detour should produce a non-cardinal turn",
         )
 
+    def test_obstacle_distance_calibration_scales_only_positive_distances(self) -> None:
+        _, normal_map, obstacle_map = self._synthetic_maps()
+        unscaled = plan_two_map_route(
+            normal_map,
+            obstacle_map,
+            start=(8, 4),
+            goal=(0, 4),
+            initial_heading_deg=90.0,
+            robot_radius_mm=0.0,
+            safety_margin_mm=0.0,
+            obstacle_distance_scale=1.0,
+        )
+        scaled = plan_two_map_route(
+            normal_map,
+            obstacle_map,
+            start=(8, 4),
+            goal=(0, 4),
+            initial_heading_deg=90.0,
+            robot_radius_mm=0.0,
+            safety_margin_mm=0.0,
+            obstacle_distance_scale=1000.0 / 1018.2,
+        )
+
+        def pairs(route):
+            return [
+                (float(turn), float(distance))
+                for turn, distance in MOTION_PAIR_PATTERN.findall(route.command)
+            ]
+
+        unscaled_pairs = pairs(unscaled)
+        scaled_pairs = pairs(scaled)
+        self.assertEqual(
+            [turn for turn, _ in scaled_pairs],
+            [turn for turn, _ in unscaled_pairs],
+        )
+        for (_, original_distance), (_, corrected_distance) in zip(
+            unscaled_pairs,
+            scaled_pairs,
+        ):
+            if original_distance == 0.0:
+                self.assertEqual(corrected_distance, 0.0)
+            else:
+                self.assertAlmostEqual(
+                    corrected_distance,
+                    original_distance * (1000.0 / 1018.2),
+                    delta=0.11,
+                )
+
+        self.assertEqual(
+            scaled.command.split(",[")[0],
+            unscaled.command.split(",[")[0],
+        )
+        self.assertEqual(
+            scaled.command.rsplit("],", 1)[1],
+            unscaled.command.rsplit("],", 1)[1],
+        )
+
     def test_checked_in_maze_png_two_map_smoke(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         image_file = project_root / "mazemappingtask2" / "maze.png"
@@ -333,6 +391,21 @@ class TwoMapPlannerTests(unittest.TestCase):
             output.obstacle_preview_bgr.shape,
             output.obstacle_map.crop_bgr.shape,
         )
+
+    def test_coordinate_preview_does_not_require_valid_portals(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        image_file = project_root / "mazemappingtask2" / "maze2.png"
+        bad_portals = DemoConfig(
+            image_file=image_file,
+            entrance=Portal((6, 3), (5, 3)),
+            exit=Portal((1, 6), (1, 5)),
+        )
+
+        preview = prepare_mapping_preview(bad_portals)
+
+        self.assertEqual(preview.coordinate_grid_bgr.shape, preview.rectified_bgr.shape)
+        self.assertEqual(preview.calibration.centre((0, 0)), (44, 42))
+        self.assertEqual(preview.calibration.centre((8, 8)), (284, 282))
 
 
 if __name__ == "__main__":

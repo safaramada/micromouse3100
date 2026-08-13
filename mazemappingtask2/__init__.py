@@ -39,7 +39,10 @@ from .two_map_planner import (
 from .two_map_demo import (
     DemoConfig,
     DemoOutput,
+    MappingPreview,
     default_unavailable_cells,
+    draw_coordinate_grid,
+    prepare_mapping_preview,
     run_two_map_demo,
 )
 
@@ -78,6 +81,9 @@ __all__ = [
     "transform_points",
     "DemoConfig",
     "DemoOutput",
+    "MappingPreview",
     "default_unavailable_cells",
+    "draw_coordinate_grid",
+    "prepare_mapping_preview",
     "run_two_map_demo",
 ]

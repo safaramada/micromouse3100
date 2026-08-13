@@ -703,8 +703,11 @@ def plan_two_map_route(
     robot_radius_mm: float,
     safety_margin_mm: float,
     goal_heading_deg: Optional[float] = None,
+    obstacle_distance_scale: float = 1.0,
 ) -> TwoMapRoute:
     """Run normal graph -> obstacle A* -> normal graph and join commands."""
+    if not math.isfinite(obstacle_distance_scale) or obstacle_distance_scale <= 0.0:
+        raise ValueError("obstacle_distance_scale must be positive and finite")
     before = shortest_cell_path(
         normal_map.graph,
         start,
@@ -742,6 +745,16 @@ def plan_two_map_route(
         obstacle_result.waypoints_mm,
         entrance_heading,
     )
+    # Physical calibration applies only to positive continuous-section drive
+    # distances. It does not alter angles, zero-distance heading alignment, or
+    # the normal maze's fixed 180 mm `f` commands.
+    obstacle_commands = [
+        MotionCommand(
+            command.turn_deg,
+            command.distance_mm * obstacle_distance_scale,
+        )
+        for command in obstacle_commands
+    ]
     exit_heading = _obstacle_final_heading(obstacle_result, entrance_heading)
     after_first_heading = (
         _direction_heading(after[0], after[1])

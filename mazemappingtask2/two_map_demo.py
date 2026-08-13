@@ -16,6 +16,7 @@ from mazemapping.mask_maze import create_maze_masks
 
 from .task2_pipeline import project_points_to_original, rectify_course
 from .two_map_planner import (
+    GridCalibration,
     Portal,
     TwoMapRoute,
     build_normal_maze_map,
@@ -47,6 +48,9 @@ class DemoConfig:
     robot_radius_mm: float = 30.0
     safety_margin_mm: float = 5.0
     obstacle_resolution_mm: float = 5.0
+    # Measured calibration: a planned 1018.2 mm drive travels correctly when
+    # the robot is commanded to drive 1000 mm.
+    obstacle_distance_scale: float = 1000.0 / 1018.2
     endpoint_clear_radius_pixels: int = 25
 
 
@@ -63,6 +67,17 @@ class DemoOutput:
     original_preview_bgr: np.ndarray
 
 
+@dataclass
+class MappingPreview:
+    """Image-processing output available before portal coordinates are known."""
+
+    source_bgr: np.ndarray
+    rectified_bgr: np.ndarray
+    task1_masks: dict[str, np.ndarray]
+    calibration: GridCalibration
+    coordinate_grid_bgr: np.ndarray
+
+
 def default_unavailable_cells() -> set[Cell]:
     """Return the 12 black corner squares excluded from the 69-cell maze."""
     return {
@@ -73,7 +88,92 @@ def default_unavailable_cells() -> set[Cell]:
     }
 
 
-def run_two_map_demo(config: DemoConfig) -> DemoOutput:
+def draw_coordinate_grid(
+    rectified_bgr: np.ndarray,
+    calibration: GridCalibration,
+) -> np.ndarray:
+    """Overlay every logical ``(row, column)`` before route configuration."""
+    display = rectified_bgr.copy()
+    unavailable = default_unavailable_cells()
+
+    for x in calibration.x_edges:
+        x_pixel = int(round(x))
+        cv2.line(
+            display,
+            (x_pixel, int(round(calibration.y_edges[0]))),
+            (x_pixel, int(round(calibration.y_edges[-1]))),
+            (255, 180, 0),
+            1,
+            cv2.LINE_AA,
+        )
+    for y in calibration.y_edges:
+        y_pixel = int(round(y))
+        cv2.line(
+            display,
+            (int(round(calibration.x_edges[0])), y_pixel),
+            (int(round(calibration.x_edges[-1])), y_pixel),
+            (255, 180, 0),
+            1,
+            cv2.LINE_AA,
+        )
+
+    overlay = display.copy()
+    for cell in unavailable:
+        row, column = cell
+        cv2.rectangle(
+            overlay,
+            (
+                int(round(calibration.x_edges[column])),
+                int(round(calibration.y_edges[row])),
+            ),
+            (
+                int(round(calibration.x_edges[column + 1])),
+                int(round(calibration.y_edges[row + 1])),
+            ),
+            (35, 35, 35),
+            -1,
+        )
+    display = cv2.addWeighted(display, 0.72, overlay, 0.28, 0.0)
+
+    for row in range(calibration.rows):
+        for column in range(calibration.columns):
+            centre_x, centre_y = calibration.centre((row, column))
+            label = f"{row},{column}"
+            text_size, _ = cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.25,
+                1,
+            )
+            origin = (
+                centre_x - text_size[0] // 2,
+                centre_y + text_size[1] // 2,
+            )
+            cv2.putText(
+                display,
+                label,
+                origin,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.25,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                display,
+                label,
+                origin,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.25,
+                (0, 40, 255),
+                1,
+                cv2.LINE_AA,
+            )
+    return display
+
+
+def prepare_mapping_preview(config: DemoConfig) -> MappingPreview:
+    """Load, rectify, mask, and label the grid without planning a route."""
     source = cv2.imread(str(config.image_file), cv2.IMREAD_COLOR)
     if source is None:
         raise FileNotFoundError(f"Could not load maze image: {config.image_file}")
@@ -82,10 +182,23 @@ def run_two_map_demo(config: DemoConfig) -> DemoOutput:
         config.output_pixels,
         config.board_corners,
     )
-
-    # This is the exact Task 1 masking entry point requested by the user.
     task1_masks = create_maze_masks(rectified)
     calibration = make_grid_calibration(*config.grid_bounds)
+    return MappingPreview(
+        source_bgr=source,
+        rectified_bgr=rectified,
+        task1_masks=task1_masks,
+        calibration=calibration,
+        coordinate_grid_bgr=draw_coordinate_grid(rectified, calibration),
+    )
+
+
+def run_two_map_demo(config: DemoConfig) -> DemoOutput:
+    preview = prepare_mapping_preview(config)
+    source = preview.source_bgr
+    rectified = preview.rectified_bgr
+    task1_masks = preview.task1_masks
+    calibration = preview.calibration
     start_point = calibration.centre(config.start)
     goal_point = calibration.centre(config.goal)
     normal_map = build_normal_maze_map(
@@ -120,6 +233,7 @@ def run_two_map_demo(config: DemoConfig) -> DemoOutput:
         config.robot_radius_mm,
         config.safety_margin_mm,
         config.goal_heading_deg,
+        config.obstacle_distance_scale,
     )
 
     normal_preview = draw_normal_maze_map(

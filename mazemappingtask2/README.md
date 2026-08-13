@@ -61,24 +61,34 @@ Only the middle bracketed section contains arbitrary angles and metric
 distances. A zero-distance final tuple may be added there to align the robot
 with the first cardinal direction of the second normal-maze section.
 
+The continuous drive distances use the measured robot calibration
+`1000 / 1018.2 = 0.9821`. This scale changes only positive distances inside
+the brackets. It does not change turn angles, zero-distance alignment, or the
+normal maze's 180 mm `f` commands.
+
 The continuous crop coordinates are transformed back into the full rectified
 map, then the complete joined route is projected onto the original camera
 image.
 
 ## Run and configure
 
-Open and run all cells in `maze_mapping_task2.ipynb`. The checked-in example
-uses `mazemappingtask2/maze.png`.
+Open and run all cells in `maze_mapping_task2.ipynb`. The notebook is split
+into two phases so a changed entrance or exit cannot prevent coordinate setup:
 
-Change the input image in the notebook's **Configuration** cell:
+1. choose the image and run the labelled 9 x 9 grid preview;
+2. manually enter the obstacle-region location, start/goal, and the inside and
+   outside cell on each portal before running the planner.
+
+Change the input image in the notebook's **Phase 1** cell:
 
 ```python
-image_file=TASK2_DIR / 'maze.png'
+IMAGE_FILE=TASK2_DIR / 'maze2.png'
 ```
 
-That same cell contains the fixed-camera grid calibration, 5 x 5 location,
-programmed entrance/exit, start/goal cells and optional goal heading, and the
-measured robot radius. Full-maze coordinates use `(row, column)` from the top-left. Motion
+Phase 1 also contains the fixed-camera grid calibration. Phase 2 contains the
+5 x 5 location, programmed entrance/exit, start/goal cells, optional goal
+heading, and measured robot radius. Full-maze coordinates use `(row, column)`
+from the top-left. Motion
 headings are Cartesian: east `0`, north `90`, west `180`, south `-90`.
 
 For a different fixed camera, calibrate `board_corners` and `grid_bounds` once

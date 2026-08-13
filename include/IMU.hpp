@@ -16,10 +16,15 @@ public:
         writeRegister(0x6B, 0x00);
         delay(100);
 
-        // Gyro range: +/- 1000 deg/s.
-        // A pickup disturbance can easily exceed the previous +/-250 deg/s
-        // range, which made the integrated yaw smaller than the real turn.
-        writeRegister(0x1B, 0x10);
+        // The controlled turn is capped at a low motor PWM, so +/-500 deg/s
+        // provides twice the yaw resolution of +/-1000 deg/s without clipping
+        // normal maze turns. If raw test data ever exceeds this range, restore
+        // FS_SEL=2 and its matching 32.8 LSB/(deg/s) sensitivity.
+        writeRegister(0x1B, 0x08);
+
+        // MPU6050 DLPF_CFG=3: filter motor vibration/noise while retaining a
+        // fast enough gyro response for the approximately 100 Hz control loop.
+        writeRegister(0x1A, 0x03);
         delay(100);
 
         calibrateGyro();
@@ -69,9 +74,9 @@ public:
     }
 
 private:
-    // MPU6050 sensitivity at the configured +/-1000 deg/s range.
+    // MPU6050 sensitivity at the configured +/-500 deg/s range.
     static constexpr float gyroSensitivityLSBPerDPS() {
-        return 32.8f;
+        return 65.5f;
     }
 
     void calibrateGyro() {

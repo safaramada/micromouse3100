@@ -55,7 +55,7 @@ public:
           wheel_base_mm(wheel_base_mm),
           heading_pid(2.0, 0.0, 0.06),
           distance_pid(1.2, 0.02, 0.04),
-          turn_pid(1.6, 0.0, 0.10) {}
+          turn_pid(1.45, 0.0, 0.12) {}
 
     void begin() {
         left_encoder.begin();
@@ -1048,13 +1048,15 @@ private:
     float start_left_rotation = 0;
     float start_right_rotation = 0;
     // float wall_tolerance_mm = 5;
-    float turn_tolerance_deg = 3;
+    // A tighter deadband plus a longer settle time prevents a command from
+    // completing while the chassis is still coasting through the target.
+    float turn_tolerance_deg = 1.5f;
     unsigned long turn_settle_start_ms = 0;
-    const unsigned long turn_settle_time_ms = 100;
-    const float max_turn_pwm = 90.0;
-    const float min_turn_pwm = 55.0;
-    const float min_turn_near_target_pwm = 45.0;
-    const float turn_slow_angle_deg = 15.0;
+    const unsigned long turn_settle_time_ms = 250;
+    const float max_turn_pwm = 80.0f;
+    const float min_turn_pwm = 50.0f;
+    const float min_turn_near_target_pwm = 32.0f;
+    const float turn_slow_angle_deg = 20.0f;
     const float max_forward_correction = 35.0;
     const float forward_slowdown_distance_mm = 90.0;
     const float min_forward_approach_pwm = 100.0;
