@@ -78,8 +78,6 @@ private:
         long sum = 0;
         const int samples = 500;
 
-        Serial.println("Calibrating IMU. Keep robot still.");
-
         for (int i = 0; i < samples; i++) {
             sum += readRawGyroZ();
             delay(2);
@@ -88,8 +86,6 @@ private:
         float raw_offset = static_cast<float>(sum) / samples;
         gyro_z_offset_dps = raw_offset / gyroSensitivityLSBPerDPS();
 
-        Serial.print("Gyro Z offset: ");
-        Serial.println(gyro_z_offset_dps);
     }
 
     float readGyroZ() {

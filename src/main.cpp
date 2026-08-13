@@ -7,8 +7,6 @@
 #include "IMU.hpp"
 #include "Lidar.hpp"
 #include "Robot.hpp"
-#include "StraightLineTracking.hpp"
-#include "Turning.hpp"
 #include "AutonomousMapping.hpp"
 
 
@@ -45,18 +43,11 @@ Robot robot(
     left_lidar,
     right_lidar,
     imu,
-    16.0,  // wheel radius in mm
-    80.0   // wheel base in mm
+    16.0   // wheel radius in mm
 );
-
-StraightLineTracking straightLineTask(robot);
-Turning turningTask(robot);
 
 // 4.3
 AutonomousMapping autonomousMapping(robot);
-
-const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
-// const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
 
 bool i2cDevicePresent(uint8_t address) {
     Wire.beginTransmission(address);
@@ -75,28 +66,7 @@ uint8_t findOledAddress() {
     return 0;
 }
 
-void printI2cDevices() {
-    Serial.println(F("I2C devices found:"));
-    bool foundAny = false;
-
-    for (uint8_t address = 1; address < 127; address++) {
-        if (i2cDevicePresent(address)) {
-            Serial.print(F("  0x"));
-            if (address < 0x10) {
-                Serial.print('0');
-            }
-            Serial.println(address, HEX);
-            foundAny = true;
-        }
-    }
-
-    if (!foundAny) {
-        Serial.println(F("  none"));
-    }
-}
-
 void setup() {
-    Serial.begin(115200);
     delay(1000);
 
     Wire.begin();
@@ -111,15 +81,10 @@ void setup() {
     }
 
     if (oledReady) {
-        Serial.print(F("OLED found at 0x"));
-        Serial.println(oledAddress, HEX);
         oled.clearDisplay();
         oled.setFont(u8x8_font_chroma48medium8_r);
         oled.drawString(0, 0, "Micromouse");
         oled.drawString(0, 1, "Initialising...");
-    } else {
-        Serial.println(F("OLED not found at 0x3C or 0x3D"));
-        printI2cDevices();
     }
 
     robot.begin();
@@ -135,34 +100,26 @@ void setup() {
     // Side LiDARs only steer away when a wall is closer than 50 mm.
     robot.enableSideLidarAvoidance(true, 50.0);
 
-    // Start the next turn if the front wall is closer than 50 mm.
-    robot.enableFrontLidarSafety(true, 50);
-
-    // robot.startCommandString(command_string, 130);
-    // robot.startTurnHold(-90.0);
-    // since its from the bottom, plus 2cm so its plus 20cm
-    // robot.startWallDistance(120);   // DIRIVING AND STOPPING TASK 
-    // robot.startStraightLine(3000, 130); // STRAIGHT LINE TRACKING TASK
-
-    // 4.3
+    // Task 4.3: explore the full maze, return to the start through DFS
+    // backtracking, then run the calculated shortest route to the goal.
     autonomousMapping.begin(
         0,                              // start row
         0,                              // start column
         AutonomousMapping::SOUTH,       // start direction
-        4,                              // goal row
-        7                               // goal column
-);
+        1,                              // goal row
+        3                               // goal column
+    );
+
+    if (oledReady) {
+        autonomousMapping.renderToOled(oled);
+    }
 
 }
 
-/*
-void loop() {
-    robot.update();
-    delay(10);
-} 
-*/
-
 void loop() {
     autonomousMapping.update();
-    delay(500);
+    if (oledReady && autonomousMapping.displayNeedsUpdate()) {
+        autonomousMapping.renderToOled(oled);
+    }
+    delay(10);
 }

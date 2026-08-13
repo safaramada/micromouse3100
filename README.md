@@ -1,18 +1,24 @@
 # MTRN3100 Micromouse
 
-Arduino Nano starter code for the MTRN3100 micromouse project. The current code is organised around Task 3 simple driving: straight-line tracking, wall-distance stopping, turning, and chained maze commands.
+Arduino Nano code for the MTRN3100 micromouse project. The current firmware is
+configured for Task 4.3 online autonomous mapping. The straight-driving and
+turning controllers required by the mapper remain inside `Robot.hpp`.
 
 The repository also contains a computer-side path-planning core for Task 4.2.
 
 ## Project Files
 
-- `src/main.cpp`: Arduino entry point. Selects which task to run and creates the motors, encoders, lidar, IMU, and robot object.
-- `include/Robot.hpp`: High-level robot behaviour for Task 3. Combines sensors, motors, and PID controllers into movement modes.
+- `src/main.cpp`: Arduino entry point. Creates the hardware objects and starts Task 4.3.
+- `include/Robot.hpp`: Task 4.3 motion layer. Provides the proven straight-line
+  and turning controls used by autonomous mapping.
 - `include/Motor.hpp`: Low-level motor PWM and direction control.
 - `include/Encoder.hpp`: Encoder counting and wheel rotation measurement.
 - `include/PIDController.hpp`: PID control helper.
 - `include/Lidar.hpp`: Front distance sensor interface.
 - `include/IMU.hpp`: Heading/yaw sensor interface.
+- `include/AutonomousMapping.hpp`: Non-blocking 9 x 9 online maze exploration.
+  It senses walls, explores unvisited cells using depth-first search, backtracks
+  through parent cells, and stops safely at the configured goal or on an error.
 - `computer/task4/planner.py`: Python occupancy-grid planner for Task 4.2. It
   performs obstacle inflation, eight-connected A* search, safe line-of-sight
   simplification, and waypoint/motion-command generation.
@@ -59,38 +65,34 @@ Run the planner tests on a computer with:
 python3 -m unittest test/test_task4_planner.py
 ```
 
-## Selecting A Task
+## Active Task 4.3 Firmware
 
-In `src/main.cpp`, change `ACTIVE_TASK`:
+`src/main.cpp` currently starts the mapper with:
 
 ```cpp
-#define ACTIVE_TASK RUN_STRAIGHT_LINE
+autonomousMapping.begin(0, 0, AutonomousMapping::SOUTH, 4, 7, true);
 ```
 
-Available modes:
+The final argument controls completion:
 
-- `RUN_IDLE`: robot stays stopped
-- `RUN_STRAIGHT_LINE`: drive 1 m forward
-- `RUN_WALL_DISTANCE`: hold 100 mm from a front wall
-- `RUN_TURN`: turn 90 degrees clockwise and hold heading
-- `RUN_COMMAND_STRING`: run a command string such as `lfrfflfr`
+- `true`: stop when the goal is first reached.
+- `false`: continue until every cell reachable from the start has been mapped.
 
-## What Still Needs Implementation
+Serial logging is disabled in the autonomous firmware so UART formatting and
+transmission cannot disturb the control-loop timing. The OLED only reports
+startup readiness.
 
-The current files are starter code. Before the robot can run properly, fill in:
+The main physical tuning constants are near the top of
+`include/AutonomousMapping.hpp`: `wallThresholdMm`, `forwardPwm`, and the
+180 mm cell movement passed to `startStraightLine()`.
 
-- motor pin setup and PWM output in `include/Motor.hpp`
-- encoder interrupts, counting, and rotation conversion in `include/Encoder.hpp`
-- PID maths in `include/PIDController.hpp`
-- real lidar library calls in `include/Lidar.hpp`
-- real IMU library calls and gyro calibration in `include/IMU.hpp`
-- command-string state machine in `include/Robot.hpp`
+## Hardware Checks Still Required
 
-Also update the motor and encoder pin numbers in `src/main.cpp` to match your robot wiring.
+The software builds for the Nano, but these values must match the physical
+robot before an unattended maze run:
 
-## Task 3 Notes
-
-- For straight-line tracking, use the IMU to correct heading while encoders measure distance.
-- For wall stopping, use the front lidar and tune the distance PID to settle at 100 mm from the wall.
-- For turning, use the IMU yaw angle and tune the turn PID until it stops within the required tolerance.
-- For chained movement, reuse the same forward and turn behaviours for each command.
+- Motor, encoder, XSHUT, and I2C wiring in `src/main.cpp`.
+- Encoder counts per revolution and wheel radius.
+- The measured centre-to-centre maze-cell distance.
+- LiDAR wall threshold and sensor mounting offsets.
+- Turn sign and PID tuning on the real drivetrain.
