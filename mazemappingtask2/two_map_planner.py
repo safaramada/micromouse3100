@@ -3,7 +3,7 @@
 The normal maze is represented as a discrete 9 x 9 cell graph built from the
 directional masks produced by ``mazemapping.mask_maze.create_maze_masks``.
 The configured 5 x 5 continuous region is separately warped into a metric
-occupancy grid and solved with continuous A*.
+occupancy grid and solved with RRT*.
 
 Generative AI disclosure: OpenAI Codex assisted with this implementation.
 AI-assisted sections are identified by inline comments.
@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import heapq
 import math
+import random
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import cv2
@@ -25,6 +26,7 @@ from computer.task4 import (
     MotionCommand,
     OccupancyGrid,
     PlanResult,
+    PlanStatus,
     PlannerConfig,
 )
 from mazemapping.mask_maze import create_maze_masks
@@ -33,6 +35,167 @@ from mazemapping.mask_maze import create_maze_masks
 Cell = Tuple[int, int]
 Point = Tuple[int, int]
 Graph = Dict[Cell, List[Cell]]
+
+
+class RRTStarPlanner(ContinuousPlanner):
+    """Deterministic RRT* planner for the continuous cylinder region.
+
+    Edges are checked against the inflated occupancy grid.  The returned route
+    is resampled so the robot never receives one excessively long drive.
+    """
+
+    def __init__(
+        self,
+        config: PlannerConfig,
+        iterations: int = 5000,
+        step_pixels: int = 20,
+        neighbour_pixels: int = 20,
+        max_waypoint_spacing_mm: float = 75.0,
+        seed: int = 3100,
+    ) -> None:
+        super().__init__(config)
+        self.iterations = iterations
+        self.step_pixels = step_pixels
+        self.neighbour_pixels = neighbour_pixels
+        self.max_waypoint_spacing_mm = max_waypoint_spacing_mm
+        self.seed = seed
+
+    def plan(self, grid, start, goal) -> PlanResult:
+        start_point, goal_point = self._point(start), self._point(goal)
+        if not self._valid_config() or self.iterations <= 0 or self.step_pixels <= 0:
+            return PlanResult(PlanStatus.INVALID_GRID)
+        if not grid.in_bounds(start_point):
+            return PlanResult(PlanStatus.START_OUT_OF_BOUNDS)
+        if not grid.in_bounds(goal_point):
+            return PlanResult(PlanStatus.GOAL_OUT_OF_BOUNDS)
+
+        inflated = self._inflate(
+            grid, self.config.robot_radius_mm + self.config.safety_margin_mm
+        )
+        if inflated.is_occupied(start_point):
+            return PlanResult(PlanStatus.START_BLOCKED, inflated)
+        if inflated.is_occupied(goal_point):
+            return PlanResult(PlanStatus.GOAL_BLOCKED, inflated)
+
+        rng = random.Random(self.seed)
+        nodes = [start_point]
+        parents = [-1]
+        costs = [0.0]
+        children = [set()]
+
+        for iteration in range(self.iterations):
+            sample = goal_point if iteration % 10 == 0 else GridPoint(
+                rng.randrange(inflated.width), rng.randrange(inflated.height)
+            )
+            if inflated.is_occupied(sample):
+                continue
+            nearest = min(
+                range(len(nodes)), key=lambda i: self._distance(nodes[i], sample)
+            )
+            new = self._steer(nodes[nearest], sample)
+            if new in nodes or inflated.is_occupied(new):
+                continue
+
+            near = [
+                i for i, point in enumerate(nodes)
+                if self._distance(point, new) <= self.neighbour_pixels
+                and self._has_line_of_sight(inflated, point, new)
+            ]
+            if not near:
+                continue
+            parent = min(near, key=lambda i: costs[i] + self._distance(nodes[i], new))
+            new_cost = costs[parent] + self._distance(nodes[parent], new)
+            nodes.append(new)
+            parents.append(parent)
+            costs.append(new_cost)
+            children.append(set())
+            new_index = len(nodes) - 1
+            children[parent].add(new_index)
+
+            for index in near:
+                rewired = new_cost + self._distance(new, nodes[index])
+                if index != 0 and rewired + 1e-9 < costs[index]:
+                    old_cost = costs[index]
+                    children[parents[index]].discard(index)
+                    parents[index] = new_index
+                    costs[index] = rewired
+                    children[new_index].add(index)
+                    self._shift_descendant_costs(
+                        index, rewired - old_cost, children, costs
+                    )
+
+        goal_candidates = [
+            index for index, point in enumerate(nodes)
+            if self._has_line_of_sight(inflated, point, goal_point)
+        ]
+        if not goal_candidates:
+            return PlanResult(PlanStatus.NO_PATH, inflated)
+        goal_parent = min(
+            goal_candidates,
+            key=lambda i: costs[i] + self._distance(nodes[i], goal_point),
+        )
+
+        path = [goal_point]
+        index = goal_parent
+        while index >= 0:
+            path.append(nodes[index])
+            index = parents[index]
+        path.reverse()
+        # RRT* needs many closely spaced tree nodes to search reliably, but
+        # those internal nodes should not all become robot commands. First
+        # remove any node that can be bypassed with a collision-free edge,
+        # then add checkpoints at the requested maximum spacing. This makes
+        # max_waypoint_spacing_mm directly control the blue output dots.
+        collision_safe_segments = self._simplify(inflated, path)
+        waypoints = self._resample(
+            collision_safe_segments,
+            grid.resolution_mm,
+        )
+        metric = self._to_metric(inflated, waypoints)
+        return PlanResult(
+            PlanStatus.SUCCESS,
+            inflated,
+            path,
+            waypoints,
+            metric,
+            self._to_relative(metric),
+        )
+
+    @staticmethod
+    def _shift_descendant_costs(index, delta, children, costs) -> None:
+        pending = list(children[index])
+        while pending:
+            child = pending.pop()
+            costs[child] += delta
+            pending.extend(children[child])
+
+    @staticmethod
+    def _distance(first: GridPoint, second: GridPoint) -> float:
+        return math.hypot(second.x - first.x, second.y - first.y)
+
+    def _steer(self, start: GridPoint, target: GridPoint) -> GridPoint:
+        distance = self._distance(start, target)
+        if distance <= self.step_pixels:
+            return target
+        scale = self.step_pixels / distance
+        return GridPoint(
+            int(round(start.x + (target.x - start.x) * scale)),
+            int(round(start.y + (target.y - start.y) * scale)),
+        )
+
+    def _resample(self, path: Sequence[GridPoint], resolution_mm: float) -> List[GridPoint]:
+        maximum = max(1, int(self.max_waypoint_spacing_mm / resolution_mm))
+        output = [path[0]]
+        for start, end in zip(path, path[1:]):
+            pieces = max(1, int(math.ceil(self._distance(start, end) / maximum)))
+            for piece in range(1, pieces + 1):
+                point = GridPoint(
+                    int(round(start.x + (end.x - start.x) * piece / pieces)),
+                    int(round(start.y + (end.y - start.y) * piece / pieces)),
+                )
+                if point != output[-1]:
+                    output.append(point)
+        return output
 
 
 HEADINGS_DEG = {
@@ -704,8 +867,9 @@ def plan_two_map_route(
     safety_margin_mm: float,
     goal_heading_deg: Optional[float] = None,
     obstacle_distance_scale: float = 1.0,
+    rrt_max_waypoint_spacing_mm: float = 150.0,
 ) -> TwoMapRoute:
-    """Run normal graph -> obstacle A* -> normal graph and join commands."""
+    """Run normal graph -> obstacle RRT* -> normal graph and join commands."""
     if not math.isfinite(obstacle_distance_scale) or obstacle_distance_scale <= 0.0:
         raise ValueError("obstacle_distance_scale must be positive and finite")
     before = shortest_cell_path(
@@ -724,12 +888,15 @@ def plan_two_map_route(
         raise RuntimeError("no normal-maze path exists from exit to goal")
 
     before_lfr, entrance_heading = encode_cell_path(before, initial_heading_deg)
-    planner = ContinuousPlanner(
+    if not math.isfinite(rrt_max_waypoint_spacing_mm) or rrt_max_waypoint_spacing_mm <= 0:
+        raise ValueError("rrt_max_waypoint_spacing_mm must be positive and finite")
+    planner = RRTStarPlanner(
         PlannerConfig(
             robot_radius_mm=robot_radius_mm,
             safety_margin_mm=safety_margin_mm,
-            simplify_path=True,
-        )
+            simplify_path=False,
+        ),
+        max_waypoint_spacing_mm=rrt_max_waypoint_spacing_mm,
     )
     obstacle_result = planner.plan(
         obstacle_map.grid,

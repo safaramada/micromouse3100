@@ -42,8 +42,10 @@ known approximate 100 mm cylinder size so wall pieces and small floor marks do
 not become obstacles.
 
 The robot radius plus safety margin is applied only to this metric obstacle
-map. An eight-connected A* search finds a collision-free route and line-of-
-sight simplification converts it to arbitrary-angle waypoints.
+map. A deterministic RRT* search finds a collision-free route. Its edges are
+collision-checked, redundant internal tree nodes are removed, and the route is
+resampled at a configurable maximum spacing (150 mm by default). This retains
+useful checkpoints instead of issuing one long drive through the area.
 
 The portal cells are programmed deliberately. This matches the staff advice
 that the 5 x 5 entrance and exit positions may be programmed, while the walls

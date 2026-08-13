@@ -51,6 +51,7 @@ class DemoConfig:
     # Measured calibration: a planned 1018.2 mm drive travels correctly when
     # the robot is commanded to drive 1000 mm.
     obstacle_distance_scale: float = 1000.0 / 1018.2
+    rrt_max_waypoint_spacing_mm: float = 150.0
     endpoint_clear_radius_pixels: int = 25
 
 
@@ -234,6 +235,7 @@ def run_two_map_demo(config: DemoConfig) -> DemoOutput:
         config.safety_margin_mm,
         config.goal_heading_deg,
         config.obstacle_distance_scale,
+        config.rrt_max_waypoint_spacing_mm,
     )
 
     normal_preview = draw_normal_maze_map(
