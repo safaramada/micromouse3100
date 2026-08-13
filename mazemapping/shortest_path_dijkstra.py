@@ -40,17 +40,19 @@ import cv2
 import numpy as np
 
 try:
+    from clip_grid import infer_clip_grid
     from mask_maze import create_board_mask, create_maze_masks
     from path_planning_nodes import (
         GridNode,
         add_clearance,
         ensure_binary_planning_map,
         generate_fixed_grid_nodes,
+        generate_nodes_from_positions,
     )
 except ImportError as error:
     raise ImportError(
-        "Put mask_maze.py and path_planning_nodes_fixed_grid.py in the same "
-        "folder as shortest_path_dijkstra.py."
+        "Put clip_grid.py, mask_maze.py, and path_planning_nodes.py in the "
+        "same folder as shortest_path_dijkstra.py."
     ) from error
 
 
@@ -516,6 +518,15 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--grid-from-clips",
+        action="store_true",
+        help=(
+            "Detect cyan wall clips and fit a perspective-aware node grid. "
+            "When omitted, the original fixed inset grid is used."
+        ),
+    )
+
+    parser.add_argument(
         "--clearance",
         type=int,
         default=CLEARANCE_PIXELS,
@@ -596,14 +607,37 @@ def main() -> None:
     height, width = safe_planning_map.shape
     board_mask, _ = create_board_mask(height, width)
 
-    nodes = generate_fixed_grid_nodes(
-        planning_map=safe_planning_map,
-        board_mask=board_mask,
-        rows=args.rows,
-        columns=args.columns,
-        inset_x_fraction=args.inset_x,
-        inset_y_fraction=args.inset_y,
-    )
+    if args.grid_from_clips:
+        clip_grid = infer_clip_grid(
+            image=original_image,
+            rows=args.rows,
+            columns=args.columns,
+        )
+        nodes = generate_nodes_from_positions(
+            planning_map=safe_planning_map,
+            board_mask=board_mask,
+            rows=args.rows,
+            columns=args.columns,
+            positions=clip_grid.node_positions,
+        )
+        print(
+            "Clip-derived grid: {} detections, {} fit inliers, "
+            "median error {:.2f} pixels."
+            .format(
+                len(clip_grid.clip_centres),
+                clip_grid.inlier_count,
+                clip_grid.median_fit_error,
+            )
+        )
+    else:
+        nodes = generate_fixed_grid_nodes(
+            planning_map=safe_planning_map,
+            board_mask=board_mask,
+            rows=args.rows,
+            columns=args.columns,
+            inset_x_fraction=args.inset_x,
+            inset_y_fraction=args.inset_y,
+        )
 
     graph = build_collision_free_graph(
         nodes=nodes,
