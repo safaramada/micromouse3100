@@ -8,6 +8,17 @@ namespace mtrn3100 {
 class AutonomousMapping {
 public:
 
+    enum DebugStatus {
+        STATUS_READY,
+        STATUS_MOVING,
+        STATUS_TURNING,
+        STATUS_FRONT_WALL,
+        STATUS_SIDE_WALL,
+        STATUS_LIDAR_TIMEOUT,
+        STATUS_NO_ROUTE,
+        STATUS_COMPLETE
+    };
+
     enum Direction {
         NORTH = 0,
         EAST  = 1,
@@ -49,16 +60,19 @@ public:
         visitedCells = 0;
         state = READY;
         goalReached = false;
+        completed = false;
+        debugStatus = STATUS_READY;
 
         clearMap();
 
-        Serial.println("4.3 Autonomous Mapping started");
+        Serial.println(F("4.3 Autonomous Mapping started"));
     }
 
     void update() {
         if (!maze[currentRow][currentCol].visited) {
             maze[currentRow][currentCol].visited = true;
             visitedCells++;
+            recordSideWalls();
             printMap();
         }
 
@@ -73,7 +87,9 @@ public:
         if (currentRow == goalRow && currentCol == goalCol) {
             robot.stop();
             goalReached = true;
-            Serial.println("Autonomous mapping goal reached");
+            completed = true;
+            debugStatus = STATUS_COMPLETE;
+            Serial.println(F("Autonomous mapping goal reached"));
             printMap();
             return;
         }
@@ -85,6 +101,7 @@ public:
         if (state == MOVING) {
             if (robot.wasStoppedByFrontObstacle()) {
                 addWall(currentRow, currentCol, currentDirection);
+                debugStatus = STATUS_FRONT_WALL;
                 Serial.print(F("Wall added at row "));
                 Serial.print(currentRow);
                 Serial.print(F(", column "));
@@ -111,6 +128,7 @@ public:
         if (!chooseNextDirection(targetDirection)) {
             robot.stop();
             goalReached = true;
+            debugStatus = STATUS_NO_ROUTE;
             Serial.println(F("Mapping stopped: no open neighbouring cell"));
             return;
         }
@@ -125,6 +143,7 @@ public:
 
             robot.startTurn(quarterTurns * 90.0f);
             state = TURNING;
+            debugStatus = STATUS_TURNING;
             return;
         }
 
@@ -140,6 +159,37 @@ public:
 
         robot.startStraightLine(CELL_DISTANCE_MM, DRIVE_PWM);
         state = MOVING;
+        debugStatus = STATUS_MOVING;
+    }
+
+    uint8_t getCurrentRow() const {
+        return currentRow;
+    }
+
+    uint8_t getCurrentCol() const {
+        return currentCol;
+    }
+
+    bool isComplete() const {
+        return completed;
+    }
+
+    DebugStatus getDebugStatus() const {
+        if (robot.hasLidarTimeout()) return STATUS_LIDAR_TIMEOUT;
+        return debugStatus;
+    }
+
+    uint8_t getMazeSize() const {
+        return MAZE_SIZE;
+    }
+
+    char getMazeSymbol(uint8_t row, uint8_t col) const {
+        if (row >= MAZE_SIZE || col >= MAZE_SIZE) return ' ';
+        if (row == currentRow && col == currentCol) return 'R';
+        if (row == startRow && col == startCol) return 'S';
+        if (row == goalRow && col == goalCol) return 'G';
+        if (maze[row][col].visited) return '.';
+        return '?';
     }
 
 private:
@@ -149,6 +199,7 @@ private:
     Robot& robot;
 
     Cell maze[MAZE_SIZE][MAZE_SIZE];
+    uint8_t floodDistance[MAZE_SIZE][MAZE_SIZE];
 
     uint8_t currentRow = 0;
     uint8_t currentCol = 0;
@@ -174,6 +225,8 @@ private:
     uint8_t nextRow = 0;
     uint8_t nextCol = 0;
     bool goalReached = false;
+    bool completed = false;
+    DebugStatus debugStatus = STATUS_READY;
 
     static constexpr float CELL_DISTANCE_MM = 180.0f;
     static constexpr int16_t DRIVE_PWM = 130;
@@ -241,9 +294,91 @@ private:
         }
     }
 
-    bool chooseNextDirection(Direction& chosenDirection) const {
+    void recordSideWalls() {
+        bool leftWall;
+        bool rightWall;
+        robot.detectSideWalls(leftWall, rightWall);
+
+        Direction leftDirection = static_cast<Direction>(
+            (static_cast<uint8_t>(currentDirection) + 3) % 4
+        );
+        Direction rightDirection = static_cast<Direction>(
+            (static_cast<uint8_t>(currentDirection) + 1) % 4
+        );
+
+        if (leftWall) {
+            addWall(currentRow, currentCol, leftDirection);
+            debugStatus = STATUS_SIDE_WALL;
+            Serial.print(F("Recorded left wall, direction "));
+            Serial.println(static_cast<uint8_t>(leftDirection));
+        }
+
+        if (rightWall) {
+            addWall(currentRow, currentCol, rightDirection);
+            debugStatus = STATUS_SIDE_WALL;
+            Serial.print(F("Recorded right wall, direction "));
+            Serial.println(static_cast<uint8_t>(rightDirection));
+        }
+    }
+
+    void runFloodFill() {
+        // Rebuild all distances whenever a route is selected. This correctly
+        // handles distances increasing after a newly discovered wall without
+        // needing a queue or a second 81-byte working array.
+        for (uint8_t row = 0; row < MAZE_SIZE; row++) {
+            for (uint8_t col = 0; col < MAZE_SIZE; col++) {
+                floodDistance[row][col] = 0xFF;
+            }
+        }
+        floodDistance[goalRow][goalCol] = 0;
+
+        bool changed;
+        do {
+            changed = false;
+
+            for (uint8_t row = 0; row < MAZE_SIZE; row++) {
+                for (uint8_t col = 0; col < MAZE_SIZE; col++) {
+                    if (row == goalRow && col == goalCol) continue;
+
+                    uint8_t bestNeighbour = 0xFF;
+
+                    for (uint8_t value = NORTH; value <= WEST; value++) {
+                        Direction direction = static_cast<Direction>(value);
+                        if (hasWall(row, col, direction)) continue;
+
+                        uint8_t neighbourRow;
+                        uint8_t neighbourCol;
+                        if (!getNeighbour(row, col, direction,
+                                          neighbourRow, neighbourCol)) {
+                            continue;
+                        }
+
+                        uint8_t distance =
+                            floodDistance[neighbourRow][neighbourCol];
+                        if (distance < bestNeighbour) {
+                            bestNeighbour = distance;
+                        }
+                    }
+
+                    uint8_t newDistance = bestNeighbour == 0xFF
+                        ? 0xFF
+                        : static_cast<uint8_t>(bestNeighbour + 1);
+
+                    if (floodDistance[row][col] != newDistance) {
+                        floodDistance[row][col] = newDistance;
+                        changed = true;
+                    }
+                }
+            }
+        } while (changed);
+    }
+
+    bool chooseNextDirection(Direction& chosenDirection) {
+        runFloodFill();
+
         bool found = false;
-        uint16_t bestScore = 0xFFFF;
+        uint8_t bestDistance = 0xFF;
+        bool bestVisited = true;
 
         for (uint8_t value = NORTH; value <= WEST; value++) {
             Direction direction = static_cast<Direction>(value);
@@ -255,18 +390,15 @@ private:
                 continue;
             }
 
-            // Prefer cells closer to the goal. An unvisited cell receives a
-            // strong preference so the robot explores around known walls
-            // instead of immediately returning to the previous cell.
-            uint16_t score =
-                abs(static_cast<int16_t>(row) - goalRow) +
-                abs(static_cast<int16_t>(col) - goalCol);
+            uint8_t distance = floodDistance[row][col];
+            if (distance == 0xFF) continue;
 
-            if (maze[row][col].visited) score += MAZE_SIZE * MAZE_SIZE;
-
-            if (!found || score < bestScore) {
+            bool visited = maze[row][col].visited;
+            if (!found || distance < bestDistance ||
+                (distance == bestDistance && bestVisited && !visited)) {
                 found = true;
-                bestScore = score;
+                bestDistance = distance;
+                bestVisited = visited;
                 chosenDirection = direction;
             }
         }
@@ -300,7 +432,7 @@ private:
     void printMap() {
 
         Serial.println();
-        Serial.println("----- MAZE MAP -----");
+        Serial.println(F("----- MAZE MAP -----"));
 
         for (uint8_t row = 0; row < MAZE_SIZE; row++) {
 
@@ -326,16 +458,16 @@ private:
             Serial.println();
         }
 
-        Serial.print("Visited cells: ");
+        Serial.print(F("Visited cells: "));
         Serial.print(visitedCells);
-        Serial.print(" / ");
+        Serial.print(F(" / "));
         Serial.println(MAZE_SIZE * MAZE_SIZE);
 
-        Serial.print("Map completion: ");
+        Serial.print(F("Map completion: "));
         Serial.print(getCompletionPercentage(), 1);
-        Serial.println("%");
+        Serial.println(F("%"));
 
-        Serial.println("--------------------");
+        Serial.println(F("--------------------"));
     }
 };
 

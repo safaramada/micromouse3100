@@ -55,6 +55,22 @@ Turning turningTask(robot);
 // 4.3
 AutonomousMapping autonomousMapping(robot);
 
+uint8_t displayedMappingRow = 0xFF;
+uint8_t displayedMappingCol = 0xFF;
+bool displayedMazeComplete = false;
+AutonomousMapping::DebugStatus displayedDebugStatus =
+    AutonomousMapping::STATUS_READY;
+bool displayedMazePage = false;
+
+const char STATUS_READY_TEXT[] PROGMEM = "Ready";
+const char STATUS_MOVING_TEXT[] PROGMEM = "Moving";
+const char STATUS_TURNING_TEXT[] PROGMEM = "Turning";
+const char STATUS_FRONT_WALL_TEXT[] PROGMEM = "Front wall";
+const char STATUS_SIDE_WALL_TEXT[] PROGMEM = "Side wall";
+const char STATUS_TIMEOUT_TEXT[] PROGMEM = "Lidar timeout";
+const char STATUS_NO_ROUTE_TEXT[] PROGMEM = "No route";
+const char STATUS_COMPLETE_TEXT[] PROGMEM = "Completed";
+
 const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
 // const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
 
@@ -93,6 +109,74 @@ void printI2cDevices() {
     if (!foundAny) {
         Serial.println(F("  none"));
     }
+}
+
+void updateMappingOled() {
+    if (!oledReady) return;
+
+    uint8_t row = autonomousMapping.getCurrentRow();
+    uint8_t col = autonomousMapping.getCurrentCol();
+    bool complete = autonomousMapping.isComplete();
+    AutonomousMapping::DebugStatus status = autonomousMapping.getDebugStatus();
+    bool mazePage = ((millis() / 3000UL) % 2) != 0;
+
+    if (row == displayedMappingRow &&
+        col == displayedMappingCol &&
+        complete == displayedMazeComplete &&
+        status == displayedDebugStatus &&
+        mazePage == displayedMazePage) {
+        return;
+    }
+
+    displayedMappingRow = row;
+    displayedMappingCol = col;
+    displayedMazeComplete = complete;
+    displayedDebugStatus = status;
+    displayedMazePage = mazePage;
+
+    oled.clearDisplay();
+
+    if (mazePage) {
+        const uint8_t mazeSize = autonomousMapping.getMazeSize();
+        // U8x8 has eight text rows. Show rows 0-7 normally and scroll down
+        // one row when the robot reaches the final maze row.
+        uint8_t firstRow = row >= 8 ? 1 : 0;
+        char mazeLine[10];
+        mazeLine[9] = '\0';
+
+        for (uint8_t displayRow = 0; displayRow < 8; displayRow++) {
+            uint8_t mazeRow = firstRow + displayRow;
+            for (uint8_t mazeCol = 0; mazeCol < mazeSize; mazeCol++) {
+                mazeLine[mazeCol] =
+                    autonomousMapping.getMazeSymbol(mazeRow, mazeCol);
+            }
+            oled.drawString(0, displayRow, mazeLine);
+        }
+        return;
+    }
+
+    char position[] = "Position: (0,0)";
+    position[11] = '0' + row;
+    position[13] = '0' + col;
+
+    oled.drawString(0, 0, complete ? "Maze Complete!" : "Mapping Maze");
+    oled.drawString(0, 2, position);
+
+    const char* statusText = STATUS_READY_TEXT;
+    switch (status) {
+        case AutonomousMapping::STATUS_MOVING: statusText = STATUS_MOVING_TEXT; break;
+        case AutonomousMapping::STATUS_TURNING: statusText = STATUS_TURNING_TEXT; break;
+        case AutonomousMapping::STATUS_FRONT_WALL: statusText = STATUS_FRONT_WALL_TEXT; break;
+        case AutonomousMapping::STATUS_SIDE_WALL: statusText = STATUS_SIDE_WALL_TEXT; break;
+        case AutonomousMapping::STATUS_LIDAR_TIMEOUT: statusText = STATUS_TIMEOUT_TEXT; break;
+        case AutonomousMapping::STATUS_NO_ROUTE: statusText = STATUS_NO_ROUTE_TEXT; break;
+        case AutonomousMapping::STATUS_COMPLETE: statusText = STATUS_COMPLETE_TEXT; break;
+        case AutonomousMapping::STATUS_READY:
+        default: break;
+    }
+    char statusLine[14];
+    strcpy_P(statusLine, statusText);
+    oled.drawString(0, 4, statusLine);
 }
 
 void setup() {
@@ -164,5 +248,6 @@ void loop() {
 
 void loop() {
     autonomousMapping.update();
+    updateMappingOled();
     delay(10);
 }

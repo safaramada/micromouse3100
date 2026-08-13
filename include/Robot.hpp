@@ -218,6 +218,28 @@ public:
         return front_obstacle_stopped;
     }
 
+    void detectSideWalls(bool& leftWall, bool& rightWall) {
+        uint16_t leftDistance = left_lidar.readDistance();
+        lidar_timeout_detected = left_lidar.timedOut();
+        leftWall = isValidSideWall(left_lidar, leftDistance);
+
+        uint16_t rightDistance = right_lidar.readDistance();
+        lidar_timeout_detected =
+            lidar_timeout_detected || right_lidar.timedOut();
+        rightWall = isValidSideWall(right_lidar, rightDistance);
+
+        Serial.print(F("Side walls L/R: "));
+        if (leftWall) Serial.print(leftDistance);
+        else Serial.print(F("none"));
+        Serial.print('/');
+        if (rightWall) Serial.println(rightDistance);
+        else Serial.println(F("none"));
+    }
+
+    bool hasLidarTimeout() const {
+        return lidar_timeout_detected;
+    }
+
     void stop() {
         stopMotors();
         task = TASK_IDLE;
@@ -237,6 +259,7 @@ private:
         // must be applied here as well as in command-string driving.
         if (front_lidar_safety_enabled) {
             uint16_t front_distance_mm = front_lidar.readDistance();
+            lidar_timeout_detected = front_lidar.timedOut();
 
             if (front_lidar.isReadingValid() &&
                 front_distance_mm <= front_stop_distance_mm) {
@@ -910,6 +933,7 @@ private:
     bool front_lidar_safety_enabled = false;
     uint16_t front_stop_distance_mm = 40;
     bool front_obstacle_stopped = false;
+    bool lidar_timeout_detected = false;
 
     const char* command_string = nullptr;
     uint8_t command_index = 0;
