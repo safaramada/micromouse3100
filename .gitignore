@@ -2,4 +2,6 @@
 .vscode/
 .DS_Store
 platformio.ini
+__pycache__/
+*.py[cod]
 .venv/
