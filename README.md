@@ -16,6 +16,9 @@ The repository also contains a computer-side path-planning core for Task 4.2.
 - `computer/task4/planner.py`: Python occupancy-grid planner for Task 4.2. It
   performs obstacle inflation, eight-connected A* search, safe line-of-sight
   simplification, and waypoint/motion-command generation.
+- `mazemappingtask2/maze_mapping_task2.ipynb`: Notebook workflow for the full
+  Task 4.2 two-map route: discrete normal maze, separate continuous 5 x 5
+  obstacle map, then the remaining discrete normal maze.
 - `test/test_task4_planner.py`: Unit tests for the Task 4.2 planner.
 
 ## Task 4.2 Planner

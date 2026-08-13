@@ -54,7 +54,10 @@ Robot robot(
 // const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
 // const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
 const char command_string[] =
- "[f,(90.0,90.0),(-18.1,115.5),(-61.8,220.3),(20.8,561.9),(-21.6,76.4),(-9.4,90.0),(90.0,180.0),(-90.0,360.0)]";
+"f,(90.0,90.0),(6.5,43.8),(-70.0,910.7),(-26.5,90.0),(90.0,180.0),(-90.0,360.0)]";
+
+
+
 
 bool i2cDevicePresent(uint8_t address) {
     Wire.beginTransmission(address);
