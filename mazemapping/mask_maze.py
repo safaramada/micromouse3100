@@ -54,8 +54,8 @@ HORIZONTAL_BLACKHAT_KERNEL = (17, 3)
 VERTICAL_BLACKHAT_KERNEL = (3, 17)
 
 # Directional opening suppresses non-line-shaped black-hat detections.
-HORIZONTAL_OPEN_KERNEL = (3, 1)
-VERTICAL_OPEN_KERNEL = (1, 3)
+HORIZONTAL_OPEN_KERNEL = (6, 1)
+VERTICAL_OPEN_KERNEL = (1, 6)
 
 # Morphological closing joins wall pieces interrupted by cyan tape.
 CLOSE_KERNEL_SIZE = 3
