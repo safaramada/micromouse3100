@@ -153,6 +153,12 @@ public:
         command_state = COMMAND_READY;
         active_forward_command_count = 1;
         command_pause_active = false;
+        entry_localization_active = false;
+        entry_edge_detected = false;
+        entry_edge_distance_mm = 0.0f;
+        entry_edge_wall_distance_mm = 0.0f;
+        pose_localization_active = false;
+        pose_encoder_baseline_ready = false;
         base_pwm = constrain(abs(pwm), 80, 180);
 
         // This is the intended heading, accumulated from the command stream.
@@ -193,6 +199,7 @@ public:
 
     void update() {
         imu.update();
+        updatePoseEstimate();
 
         switch (task) {
             case TASK_STRAIGHT_LINE:
@@ -504,6 +511,14 @@ private:
                 maze_cell_distance_mm * active_forward_command_count;
             target_yaw_deg = planned_yaw_deg;
 
+            // The final normal-maze run has a known geometric landmark: the
+            // side wall ending at the entrance to the open section.
+            entry_localization_active =
+                nextCommandIsContinuousEntry(
+                    command_index + active_forward_command_count
+                );
+            resetEntryLocalizationState();
+
             heading_pid.reset();
             resetSideLidarAvoidanceState();
             command_state = COMMAND_FORWARD;
@@ -532,6 +547,21 @@ private:
             // then recover the exact heading intended by the preceding maze
             // commands before parsing the first angled tuple.
             stopMotors();
+
+            // Do not declare a known pose unless the expected physical
+            // landmark was actually measured at an acceptable wall offset.
+            if (!entry_edge_detected) {
+                Serial.println(F("Entry reset failed: no wall edge"));
+                finishTask();
+                return;
+            }
+            if (fabs(entry_edge_wall_distance_mm - entry_wall_target_mm) >
+                entry_wall_acceptance_tolerance_mm) {
+                Serial.println(F("Entry reset failed: wall offset"));
+                finishTask();
+                return;
+            }
+
             unsigned long settle_start_ms = millis();
             while (millis() - settle_start_ms < entry_heading_settle_time_ms) {
                 // Continue integrating any final coast after motor shutdown;
@@ -542,8 +572,18 @@ private:
             }
             imu.recalibrateGyroBias();
 
+            // Each subsequent distance command records its own encoder start,
+            // so zeroing here makes the entrance a clean odometry origin.
+            left_encoder.reset();
+            right_encoder.reset();
+            resetOpenSpacePose(planned_yaw_deg);
+
+            Serial.print(F("Entry edge: "));
+            Serial.print(entry_edge_distance_mm);
+            Serial.println(F(" mm"));
+
             target_yaw_deg = planned_yaw_deg;
-            Serial.print(F("Cylinder entry heading checkpoint: "));
+            Serial.print(F("Entry yaw: "));
             Serial.println(target_yaw_deg);
 
             beginTurnController();
@@ -633,7 +673,7 @@ private:
         Serial.println(F(" mm"));
 
         if (fabs(custom_angle_deg) > custom_angle_tolerance_deg) {
-            beginTurnController();
+            beginTurnController(true);
             command_state = COMMAND_CUSTOM_TURN;
             return;
         }
@@ -652,6 +692,23 @@ private:
 
         target_distance_mm = custom_distance_mm;
         target_yaw_deg = planned_yaw_deg;
+
+        // Build an absolute nominal waypoint from the command stream. Unlike
+        // starting every distance from the measured current position, this
+        // preserves the route's intended geometry and lets odometry correct
+        // small errors left by earlier segments.
+        float planned_heading_local_deg = IMU::wrapAngleDeg(
+            planned_yaw_deg - pose_heading_origin_deg
+        );
+        float planned_heading_rad = planned_heading_local_deg * PI / 180.0f;
+        custom_target_x_mm = planned_path_x_mm +
+            custom_distance_mm * cos(planned_heading_rad);
+        custom_target_y_mm = planned_path_y_mm +
+            custom_distance_mm * sin(planned_heading_rad);
+        custom_path_direction_x = cos(planned_heading_rad);
+        custom_path_direction_y = sin(planned_heading_rad);
+        planned_path_x_mm = custom_target_x_mm;
+        planned_path_y_mm = custom_target_y_mm;
 
         heading_pid.reset();
         resetSideLidarAvoidanceState();
@@ -713,8 +770,35 @@ private:
         }
 
         imu.update();
-        float heading_error =
-            IMU::wrapAngleDeg(imu.getYawDeg() - target_yaw_deg);
+        updatePoseEstimate();
+
+        float desired_yaw_deg = target_yaw_deg;
+        float remaining_to_waypoint_mm =
+            getCustomWaypointDistanceMM();
+
+        if (pose_localization_active && remaining_to_waypoint_mm > 0.1f) {
+            float bearing_local_deg = atan2(
+                custom_target_y_mm - pose_y_mm,
+                custom_target_x_mm - pose_x_mm
+            ) * 180.0f / PI;
+            float planned_local_deg = IMU::wrapAngleDeg(
+                target_yaw_deg - pose_heading_origin_deg
+            );
+            float waypoint_heading_adjustment_deg = constrain(
+                IMU::wrapAngleDeg(
+                    bearing_local_deg - planned_local_deg
+                ),
+                -max_waypoint_heading_adjustment_deg,
+                max_waypoint_heading_adjustment_deg
+            );
+            desired_yaw_deg = IMU::wrapAngleDeg(
+                target_yaw_deg + waypoint_heading_adjustment_deg
+            );
+        }
+
+        float heading_error = IMU::wrapAngleDeg(
+            imu.getYawDeg() - desired_yaw_deg
+        );
         float imu_correction = heading_pid.computeFromError(heading_error);
 
         // A custom (angle,distance) command is intended to follow a precise
@@ -726,7 +810,9 @@ private:
             max_forward_correction
         );
 
-        float forward_pwm = getForwardApproachPWM(distance_mm);
+        float forward_pwm = pose_localization_active
+            ? getCustomForwardApproachPWM(remaining_to_waypoint_mm)
+            : getForwardApproachPWM(distance_mm);
         float left_pwm = constrain(forward_pwm + correction, 80, 180);
         float right_pwm = constrain(forward_pwm - correction, 80, 180);
 
@@ -734,7 +820,28 @@ private:
     }
 
     bool finishCustomForwardIfNeeded(float distance_mm) {
-        if (distance_mm < target_distance_mm) {
+        if (pose_localization_active) {
+            float remaining_mm = getCustomWaypointDistanceMM();
+            float remaining_along_path_mm =
+                (custom_target_x_mm - pose_x_mm) *
+                    custom_path_direction_x +
+                (custom_target_y_mm - pose_y_mm) *
+                    custom_path_direction_y;
+
+            if (remaining_mm <= waypoint_stop_tolerance_mm ||
+                remaining_along_path_mm <= 0.0f) {
+                completeCustomCommand();
+                return true;
+            }
+
+            // Encoder-distance guard: a bad pose estimate must not make the
+            // robot drive indefinitely while searching for a waypoint.
+            if (distance_mm <
+                target_distance_mm + waypoint_max_extra_travel_mm) {
+                return false;
+            }
+
+        } else if (distance_mm < target_distance_mm) {
             return false;
         }
 
@@ -790,7 +897,9 @@ private:
             return;
         }
 
-        float lidar_correction = getSideLidarAvoidanceCorrection();
+        float lidar_correction = entry_localization_active
+            ? getEntryLocalizationCorrection(distance_mm)
+            : getSideLidarAvoidanceCorrection();
 
         // Side LiDAR calls also block. Do not issue another forward command if
         // the encoder target was crossed while waiting for them.
@@ -800,6 +909,7 @@ private:
         }
 
         imu.update();
+        updatePoseEstimate();
         float heading_error =
             IMU::wrapAngleDeg(imu.getYawDeg() - target_yaw_deg);
 
@@ -833,6 +943,13 @@ private:
         uint16_t right_reading_mm = right_lidar.readDistance();
         bool right_wall = isValidSideWall(right_lidar, right_reading_mm);
 
+        if (left_wall) {
+            entry_left_last_wall_distance_mm = left_reading_mm;
+        }
+        if (right_wall) {
+            entry_right_last_wall_distance_mm = right_reading_mm;
+        }
+
         float left_distance_mm = 0;
         float right_distance_mm = 0;
 
@@ -854,6 +971,15 @@ private:
             );
         } else {
             right_lidar_filter_ready = false;
+        }
+
+        // Only assume a corridor centre when both walls are actually visible.
+        // With one or no walls, fall through to the original avoidance logic.
+        if (left_wall && right_wall) {
+            return getTwoWallCenteringCorrection(
+                left_distance_mm,
+                right_distance_mm
+            );
         }
 
         // A side contributes only when it is inside the minimum-clearance
@@ -886,6 +1012,202 @@ private:
         );
 
         return slewSideLidarAvoidanceCorrection(target_correction);
+    }
+
+    // Wall-follow and detect the known wall edge immediately before '['.
+    // This supplies both missing position constraints: wall distance fixes the
+    // lateral coordinate and the wall edge fixes the forward coordinate.
+    float getEntryLocalizationCorrection(float distance_mm) {
+        uint16_t left_reading_mm = left_lidar.readDistance();
+        bool left_wall = isValidSideWall(left_lidar, left_reading_mm);
+
+        uint16_t right_reading_mm = right_lidar.readDistance();
+        bool right_wall = isValidSideWall(right_lidar, right_reading_mm);
+
+        float remaining_mm = target_distance_mm - distance_mm;
+        bool in_edge_window = remaining_mm <= entry_edge_search_window_mm;
+
+        updateEntryEdgeCandidate(
+            left_wall,
+            in_edge_window,
+            entry_left_edge_armed,
+            entry_left_missing_count,
+            entry_left_first_missing_distance_mm,
+            entry_left_last_wall_distance_mm,
+            distance_mm
+        );
+        updateEntryEdgeCandidate(
+            right_wall,
+            in_edge_window,
+            entry_right_edge_armed,
+            entry_right_missing_count,
+            entry_right_first_missing_distance_mm,
+            entry_right_last_wall_distance_mm,
+            distance_mm
+        );
+
+        // Follow one available wall at a known distance. If both are visible,
+        // keep the normal close-wall avoidance behaviour rather than assuming
+        // that the corridor is symmetric.
+        float wall_error_mm = 0;
+        if (left_wall && !right_wall) {
+            wall_error_mm =
+                entry_wall_target_mm - static_cast<float>(left_reading_mm);
+        } else if (right_wall && !left_wall) {
+            wall_error_mm =
+                static_cast<float>(right_reading_mm) - entry_wall_target_mm;
+        } else {
+            return getEntryCloseWallCorrection(
+                left_wall,
+                left_reading_mm,
+                right_wall,
+                right_reading_mm
+            );
+        }
+
+        if (fabs(wall_error_mm) <= entry_wall_deadband_mm) {
+            wall_error_mm = 0;
+        } else if (wall_error_mm > 0) {
+            wall_error_mm -= entry_wall_deadband_mm;
+        } else {
+            wall_error_mm += entry_wall_deadband_mm;
+        }
+
+        float target_correction = constrain(
+            entry_wall_follow_kp * wall_error_mm,
+            -max_entry_wall_correction,
+            max_entry_wall_correction
+        );
+        return slewSideLidarAvoidanceCorrection(target_correction);
+    }
+
+    float getEntryCloseWallCorrection(bool left_wall,
+                                      uint16_t left_distance_mm,
+                                      bool right_wall,
+                                      uint16_t right_distance_mm) {
+        if (left_wall && right_wall) {
+            return getTwoWallCenteringCorrection(
+                static_cast<float>(left_distance_mm),
+                static_cast<float>(right_distance_mm)
+            );
+        }
+
+        float left_intrusion_mm = left_wall
+            ? max(0.0f,
+                  side_clearance_mm - static_cast<float>(left_distance_mm))
+            : 0.0f;
+        float right_intrusion_mm = right_wall
+            ? max(0.0f,
+                  side_clearance_mm - static_cast<float>(right_distance_mm))
+            : 0.0f;
+
+        float error_mm = left_intrusion_mm - right_intrusion_mm;
+        if (fabs(error_mm) <= side_avoidance_deadband_mm) {
+            error_mm = 0;
+        } else if (error_mm > 0) {
+            error_mm -= side_avoidance_deadband_mm;
+        } else {
+            error_mm += side_avoidance_deadband_mm;
+        }
+
+        float target_correction = constrain(
+            side_avoidance_kp * error_mm,
+            -max_side_avoidance_correction,
+            max_side_avoidance_correction
+        );
+        return slewSideLidarAvoidanceCorrection(target_correction);
+    }
+
+    float getTwoWallCenteringCorrection(float left_distance_mm,
+                                        float right_distance_mm) {
+        // Positive means the left wall is closer, matching the correction
+        // sign used by the existing close-wall avoidance controller.
+        float centering_error_mm = right_distance_mm - left_distance_mm;
+
+        if (fabs(centering_error_mm) <= side_centering_deadband_mm) {
+            centering_error_mm = 0;
+        } else if (centering_error_mm > 0) {
+            centering_error_mm -= side_centering_deadband_mm;
+        } else {
+            centering_error_mm += side_centering_deadband_mm;
+        }
+
+        float target_correction = constrain(
+            side_centering_kp * centering_error_mm,
+            -max_side_centering_correction,
+            max_side_centering_correction
+        );
+        return slewSideLidarAvoidanceCorrection(target_correction);
+    }
+
+    void updateEntryEdgeCandidate(bool wall_visible,
+                                  bool in_edge_window,
+                                  bool& edge_armed,
+                                  uint8_t& missing_count,
+                                  float& first_missing_distance_mm,
+                                  float last_wall_distance_mm,
+                                  float distance_mm) {
+        if (entry_edge_detected || !in_edge_window) {
+            if (!in_edge_window) {
+                edge_armed = false;
+                missing_count = 0;
+                first_missing_distance_mm = 0.0f;
+            }
+            return;
+        }
+
+        if (wall_visible) {
+            edge_armed = true;
+            missing_count = 0;
+            first_missing_distance_mm = 0.0f;
+            return;
+        }
+
+        if (!edge_armed) {
+            return;
+        }
+
+        if (missing_count == 0) {
+            first_missing_distance_mm = distance_mm;
+        }
+        if (missing_count < entry_edge_missing_samples) {
+            missing_count++;
+        }
+
+        if (missing_count < entry_edge_missing_samples) {
+            return;
+        }
+
+        // Re-anchor the final forward endpoint to the measured landmark. The
+        // robot still completes the logical 'f', but its stopping position is
+        // now a known distance beyond the wall edge instead of being inherited
+        // from all earlier encoder error.
+        entry_edge_detected = true;
+        entry_edge_distance_mm = first_missing_distance_mm;
+        entry_edge_wall_distance_mm = last_wall_distance_mm;
+        target_distance_mm =
+            entry_edge_distance_mm + entry_edge_to_planned_start_mm;
+    }
+
+    bool nextCommandIsContinuousEntry(uint16_t index) const {
+        char next = command_string[index];
+        while (next == ',' || next == ' ' || next == '\t' ||
+               next == '\r' || next == '\n') {
+            index++;
+            next = command_string[index];
+        }
+        return next == '[';
+    }
+
+    void resetEntryLocalizationState() {
+        entry_left_edge_armed = false;
+        entry_right_edge_armed = false;
+        entry_left_missing_count = 0;
+        entry_right_missing_count = 0;
+        entry_left_first_missing_distance_mm = 0.0f;
+        entry_right_first_missing_distance_mm = 0.0f;
+        entry_left_last_wall_distance_mm = 0.0f;
+        entry_right_last_wall_distance_mm = 0.0f;
     }
 
     bool isValidSideWall(Lidar& lidar, uint16_t distance_mm) {
@@ -958,19 +1280,40 @@ private:
 
     float getTurnPWM(float yaw_error) {
         float pwm = turn_pid.computeFromError(yaw_error);
+        float slow_angle_deg = gentle_turn_profile_active
+            ? custom_turn_slow_angle_deg
+            : turn_slow_angle_deg;
         float minimum_pwm =
-            (fabs(yaw_error) <= turn_slow_angle_deg)
-                ? min_turn_near_target_pwm
-                : min_turn_pwm;
+            (fabs(yaw_error) <= slow_angle_deg)
+                ? (gentle_turn_profile_active
+                    ? custom_min_turn_near_target_pwm
+                    : min_turn_near_target_pwm)
+                : (gentle_turn_profile_active
+                    ? custom_min_turn_pwm
+                    : min_turn_pwm);
+        float maximum_pwm = gentle_turn_profile_active
+            ? custom_max_turn_pwm
+            : max_turn_pwm;
 
         if (yaw_error > 0) {
-            return constrain(pwm, minimum_pwm, max_turn_pwm);
+            return constrain(pwm, minimum_pwm, maximum_pwm);
         }
 
-        return constrain(pwm, -max_turn_pwm, -minimum_pwm);
+        return constrain(pwm, -maximum_pwm, -minimum_pwm);
     }
 
-    void beginTurnController() {
+    void beginTurnController(bool gentle_profile = false) {
+        gentle_turn_profile_active = gentle_profile;
+        if (gentle_profile) {
+            turn_pid.tune(
+                custom_turn_kp,
+                custom_turn_ki,
+                custom_turn_kd
+            );
+        } else {
+            turn_pid.tune(turn_kp, turn_ki, turn_kd);
+        }
+
         float initial_error =
             IMU::wrapAngleDeg(target_yaw_deg - imu.getYawDeg());
 
@@ -996,6 +1339,11 @@ private:
     float getForwardApproachPWM(float distance_mm) {
         float remaining_mm = target_distance_mm - distance_mm;
 
+        return getForwardApproachPWMForRemaining(remaining_mm);
+    }
+
+    float getForwardApproachPWMForRemaining(float remaining_mm) {
+
         if (remaining_mm >= forward_slowdown_distance_mm) {
             return base_pwm;
         }
@@ -1008,6 +1356,25 @@ private:
 
         return min_forward_approach_pwm +
             (base_pwm - min_forward_approach_pwm) * slowdown_ratio;
+    }
+
+    float getCustomForwardApproachPWM(float remaining_mm) {
+        float cruise_pwm = min(
+            static_cast<float>(base_pwm),
+            custom_forward_cruise_pwm
+        );
+
+        if (remaining_mm >= custom_forward_slowdown_distance_mm) {
+            return cruise_pwm;
+        }
+
+        float slowdown_ratio = constrain(
+            remaining_mm / custom_forward_slowdown_distance_mm,
+            0.0f,
+            1.0f
+        );
+        return custom_forward_approach_pwm +
+            (cruise_pwm - custom_forward_approach_pwm) * slowdown_ratio;
     }
 
     void completeCurrentCommand(uint16_t command_count = 1) {
@@ -1033,6 +1400,89 @@ private:
         float average_rotation = (fabs(left_rotation) + fabs(right_rotation)) / 2.0;
 
         return average_rotation * wheel_radius_mm;
+    }
+
+    void resetOpenSpacePose(float intended_heading_deg) {
+        pose_x_mm = 0.0f;
+        pose_y_mm = 0.0f;
+        pose_heading_origin_deg = intended_heading_deg;
+        pose_heading_deg = IMU::wrapAngleDeg(
+            imu.getYawDeg() - pose_heading_origin_deg
+        );
+        planned_path_x_mm = 0.0f;
+        planned_path_y_mm = 0.0f;
+
+        pose_last_left_rotation = left_encoder.getRotation();
+        pose_last_right_rotation = right_encoder.getRotation();
+        pose_encoder_baseline_ready = true;
+        pose_localization_active = true;
+
+    }
+
+    void updatePoseEstimate() {
+        float current_left_rotation = left_encoder.getRotation();
+        float current_right_rotation = right_encoder.getRotation();
+
+        if (!pose_encoder_baseline_ready) {
+            pose_last_left_rotation = current_left_rotation;
+            pose_last_right_rotation = current_right_rotation;
+            pose_encoder_baseline_ready = true;
+            return;
+        }
+
+        float left_delta_rotation =
+            current_left_rotation - pose_last_left_rotation;
+        float right_delta_rotation =
+            current_right_rotation - pose_last_right_rotation;
+        pose_last_left_rotation = current_left_rotation;
+        pose_last_right_rotation = current_right_rotation;
+
+        if (!pose_localization_active) {
+            return;
+        }
+
+        float new_heading_deg = IMU::wrapAngleDeg(
+            imu.getYawDeg() - pose_heading_origin_deg
+        );
+
+        // Encoder signs depend on installation. For known forward command
+        // states, the magnitude of each wheel delta gives robust travelled
+        // distance; pivot-turn encoder motion is deliberately excluded and
+        // heading comes from the IMU.
+        bool forward_motion_commanded =
+            task == TASK_STRAIGHT_LINE ||
+            (task == TASK_COMMAND_STRING &&
+                (command_state == COMMAND_FORWARD ||
+                 command_state == COMMAND_CUSTOM_FORWARD));
+
+        if (forward_motion_commanded) {
+            float left_delta_mm =
+                fabs(left_delta_rotation) * wheel_radius_mm;
+            float right_delta_mm =
+                fabs(right_delta_rotation) * wheel_radius_mm;
+            float forward_delta_mm =
+                (left_delta_mm + right_delta_mm) * 0.5f;
+
+            float heading_change_deg = IMU::wrapAngleDeg(
+                new_heading_deg - pose_heading_deg
+            );
+            float midpoint_heading_rad =
+                (pose_heading_deg + 0.5f * heading_change_deg) *
+                PI / 180.0f;
+
+            pose_x_mm += forward_delta_mm * cos(midpoint_heading_rad);
+            pose_y_mm += forward_delta_mm * sin(midpoint_heading_rad);
+        }
+
+        pose_heading_deg = new_heading_deg;
+    }
+
+    float getCustomWaypointDistanceMM() const {
+        float x_error_mm = custom_target_x_mm - pose_x_mm;
+        float y_error_mm = custom_target_y_mm - pose_y_mm;
+        return sqrt(
+            x_error_mm * x_error_mm + y_error_mm * y_error_mm
+        );
     }
 
     void setDrivePWM(float left_pwm, float right_pwm) {
@@ -1090,9 +1540,43 @@ private:
     const float min_turn_pwm = 50.0f;
     const float min_turn_near_target_pwm = 32.0f;
     const float turn_slow_angle_deg = 20.0f;
+    const float turn_kp = 1.45f;
+    const float turn_ki = 0.0f;
+    const float turn_kd = 0.12f;
+
+    bool gentle_turn_profile_active = false;
+    const float custom_turn_kp = 1.05f;
+    const float custom_turn_ki = 0.0f;
+    const float custom_turn_kd = 0.14f;
+    const float custom_max_turn_pwm = 65.0f;
+    const float custom_min_turn_pwm = 42.0f;
+    const float custom_min_turn_near_target_pwm = 30.0f;
+    const float custom_turn_slow_angle_deg = 30.0f;
     const float max_forward_correction = 35.0;
     const float forward_slowdown_distance_mm = 90.0;
     const float min_forward_approach_pwm = 100.0;
+    const float custom_forward_cruise_pwm = 115.0f;
+    const float custom_forward_approach_pwm = 90.0f;
+    const float custom_forward_slowdown_distance_mm = 100.0f;
+
+    // Lightweight encoder/IMU pose estimate for the continuous section.
+    bool pose_localization_active = false;
+    bool pose_encoder_baseline_ready = false;
+    float pose_x_mm = 0.0f;
+    float pose_y_mm = 0.0f;
+    float pose_heading_deg = 0.0f;
+    float pose_heading_origin_deg = 0.0f;
+    float pose_last_left_rotation = 0.0f;
+    float pose_last_right_rotation = 0.0f;
+    float planned_path_x_mm = 0.0f;
+    float planned_path_y_mm = 0.0f;
+    float custom_target_x_mm = 0.0f;
+    float custom_target_y_mm = 0.0f;
+    float custom_path_direction_x = 1.0f;
+    float custom_path_direction_y = 0.0f;
+    const float waypoint_stop_tolerance_mm = 6.0f;
+    const float waypoint_max_extra_travel_mm = 40.0f;
+    const float max_waypoint_heading_adjustment_deg = 12.0f;
 
     // 23/07 attempt to change jittery porblem
     float target_wall_distance_mm = 100;
@@ -1115,6 +1599,9 @@ private:
     float side_clearance_mm = 50.0;
     const float side_avoidance_kp = 0.67;
     const float max_side_avoidance_correction = 18.0;
+    const float side_centering_kp = 0.45f;
+    const float max_side_centering_correction = 12.0f;
+    const float side_centering_deadband_mm = 3.0f;
     const float max_side_avoidance_step = 3.0;
     const float side_avoidance_deadband_mm = 3.0;
     const float side_lidar_filter_alpha = 0.35;
@@ -1127,6 +1614,30 @@ private:
     bool right_lidar_filter_ready = false;
     bool front_lidar_safety_enabled = false;
     uint16_t front_stop_distance_mm = 40;
+
+    bool entry_localization_active = false;
+    bool entry_edge_detected = false;
+    float entry_edge_distance_mm = 0.0f;
+    float entry_edge_wall_distance_mm = 0.0f;
+    bool entry_left_edge_armed = false;
+    bool entry_right_edge_armed = false;
+    uint8_t entry_left_missing_count = 0;
+    uint8_t entry_right_missing_count = 0;
+    float entry_left_first_missing_distance_mm = 0.0f;
+    float entry_right_first_missing_distance_mm = 0.0f;
+    float entry_left_last_wall_distance_mm = 0.0f;
+    float entry_right_last_wall_distance_mm = 0.0f;
+    const float entry_wall_target_mm = 50.0f;
+    const float entry_wall_acceptance_tolerance_mm = 12.0f;
+    // For a 180 mm cell with the entrance edge halfway through the final
+    // centre-to-centre move. Adjust by the side sensor's forward mounting
+    // offset after measuring the chassis.
+    const float entry_edge_to_planned_start_mm = 90.0f;
+    const float entry_wall_follow_kp = 0.45f;
+    const float max_entry_wall_correction = 12.0f;
+    const float entry_wall_deadband_mm = 3.0f;
+    const float entry_edge_search_window_mm = 120.0f;
+    const uint8_t entry_edge_missing_samples = 3;
 
     const char* command_string = nullptr;
     uint16_t command_index = 0;

@@ -1,6 +1,4 @@
 #include <Arduino.h>
-#include <Wire.h>
-#include <U8x8lib.h>
 
 #include "Motor.hpp"
 #include "Encoder.hpp"
@@ -12,9 +10,6 @@
 
 
 using namespace mtrn3100;
-
-U8X8_SSD1306_128X64_NONAME_HW_I2C oled(U8X8_PIN_NONE);
-bool oledReady = false;
 
 // Replace these pins with your real wiring
 Motor leftMotor(11, 12);
@@ -54,85 +49,40 @@ Robot robot(
 // const char command_string[] = "rfffrf,[(-45.0,145.8),(0.0,138.9),(0.0,145.8),(0.0,138.9),(0.0,145.8),(0.0,138.9),(0.0,145.8),(45.0,0.0)],frf";
 //  const char command_string[] = "ffffrfrflf,[(22.2,115.3),(-0.9,119.8),(0.0,119.8),(0.9,115.3),(11.4,104.9),(0.0,104.9),(0.0,104.9),(-33.7,0.0)],frffff";
 
-const char command_string[] = "flf,[(63.4,21.7),(-22.8,89.4),(-17.7,136.9),(0.8,132.5),(9.3,115.7),(-3.3,117.3),(3.3,115.7),(-41.2,68.6),(-36.9,13.7),(45.0,0.0)],frf";
+const char command_string[] = "flf,[(-14.9,75.3),(-3.5,76.7),(9.5,93.3),(5.4,77.8),(3.6,48.5),(50.5,106.8),(11.0,132.4),(-14.6,99.5),(-2.0,96.0),(2.0,99.5),(-47.0,0.0)],f";
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // const char command_string[] =
-// "[(-45.0,10.0), (-45.0,10.0), (-45.0,10.0), (-45.0,10.0)]";
-
-bool i2cDevicePresent(uint8_t address) {
-    Wire.beginTransmission(address);
-    return Wire.endTransmission() == 0;
-}
-
-uint8_t findOledAddress() {
-    constexpr uint8_t OLED_ADDRESSES[] = {0x3C, 0x3D};
-
-    for (uint8_t address : OLED_ADDRESSES) {
-        if (i2cDevicePresent(address)) {
-            return address;
-        }
-    }
-
-    return 0;
-}
-
-void printI2cDevices() {
-    Serial.println(F("I2C devices found:"));
-    bool foundAny = false;
-
-    for (uint8_t address = 1; address < 127; address++) {
-        if (i2cDevicePresent(address)) {
-            Serial.print(F("  0x"));
-            if (address < 0x10) {
-                Serial.print('0');
-            }
-            Serial.println(address, HEX);
-            foundAny = true;
-        }
-    }
-
-    if (!foundAny) {
-        Serial.println(F("  none"));
-    }
-}
+// "f,[(-45.0,00), f (-45.0,0.0), f,  (-45.0,0.0), f, (-45.0,0.0)]";
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
 
-    Wire.begin();
-    const uint8_t oledAddress = findOledAddress();
-
-    if (oledAddress != 0) {
-        // U8x8 expects the 8-bit form of the I2C address.
-        oled.setI2CAddress(oledAddress << 1);
-        oled.begin();
-        oled.setPowerSave(0);
-        oledReady = true;
-    }
-
-    if (oledReady) {
-        Serial.print(F("OLED found at 0x"));
-        Serial.println(oledAddress, HEX);
-        oled.clearDisplay();
-        oled.setFont(u8x8_font_chroma48medium8_r);
-        oled.drawString(0, 0, "Micromouse");
-        oled.drawString(0, 1, "Initialising...");
-    } else {
-        Serial.println(F("OLED not found at 0x3C or 0x3D"));
-        printI2cDevices();
-    }
-
     robot.begin();
-
-    if (oledReady) {
-        oled.clearDisplay();
-        oled.drawString(0, 0, "Micromouse");
-        oled.drawString(0, 1, "Ready!!!");
-    }
 
     delay(1000);
 
-    // Side LiDARs only steer away when a wall is closer than 50 mm.
+    // Centre when both walls are visible and retain close-wall avoidance when
+    // only one is visible. The final run before '[' also uses the available
+    // side wall as an entrance localization reference.
     robot.enableSideLidarAvoidance(true, 50.0);
 
     // Start the next turn if the front wall is closer than 50 mm.
