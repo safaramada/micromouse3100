@@ -51,8 +51,8 @@ Robot robot(
 StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
 
-const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
-// const char command_string[] = "ffffrflfrfrflflfrfflfrfrflfrflfrffffrflfrffffflflffff";
+// const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
+const char command_string[] = "flfrffffrflfrflfrfrflffrflflfrfrffflfrfrflff";
 
 bool i2cDevicePresent(uint8_t address) {
     Wire.beginTransmission(address);
