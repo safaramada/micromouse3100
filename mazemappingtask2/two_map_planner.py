@@ -31,6 +31,7 @@ from computer.task4 import (
 )
 from mazemapping.clip_grid import ClipGridResult, infer_clip_grid, project_points
 from mazemapping.mask_maze import create_maze_masks
+from mazemapping.wall_collision import segment_is_collision_free
 
 
 Cell = Tuple[int, int]
@@ -609,6 +610,7 @@ def build_normal_maze_map(
         "03a_main_dark_mask.png",
         "02b_horizontal_line_mask.png",
         "02c_vertical_line_mask.png",
+        "07_planning_map_free_white.png",
     )
     for key in required_keys:
         if key not in mask_outputs:
@@ -617,6 +619,7 @@ def build_normal_maze_map(
     main_dark = mask_outputs["03a_main_dark_mask.png"].copy()
     horizontal = mask_outputs["02b_horizontal_line_mask.png"].copy()
     vertical = mask_outputs["02c_vertical_line_mask.png"].copy()
+    planning_map = mask_outputs["07_planning_map_free_white.png"]
     # Visible robots at supplied endpoints can otherwise look like short walls.
     # This local clearing changes only graph evidence, not Task 1's CV code.
     for centre, radius in endpoint_clearings:
@@ -673,6 +676,25 @@ def build_normal_maze_map(
                     main_dark,
                     horizontal,
                     vertical,
+                )
+                # Use Task 1's exact final edge rule: a three-pixel-wide band
+                # between node centres is blocked by any occupied pixel.
+                collision_free = segment_is_collision_free(
+                    planning_map,
+                    calibration.centre(first),
+                    calibration.centre(second),
+                    3,
+                )
+                evidence = WallEvidence(
+                    # The shared Task 1 collision rule is authoritative.  A
+                    # directional-mask hit that became borderline during
+                    # rectification is also fail-safe: never reopen a wall.
+                    blocked=(not collision_free) or evidence.uncertain,
+                    uncertain=evidence.uncertain,
+                    score=evidence.score,
+                    coverage=evidence.coverage,
+                    longest_run=evidence.longest_run,
+                    offset_pixels=evidence.offset_pixels,
                 )
             walls[edge_key] = evidence
             if not evidence.blocked:

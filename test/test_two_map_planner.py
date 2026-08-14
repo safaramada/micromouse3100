@@ -44,6 +44,9 @@ class TwoMapPlannerTests(unittest.TestCase):
             "03a_main_dark_mask.png": empty.copy(),
             "02b_horizontal_line_mask.png": empty.copy(),
             "02c_vertical_line_mask.png": empty.copy(),
+            "07_planning_map_free_white.png": np.full(
+                (size, size), 255, dtype=np.uint8
+            ),
         }
 
     @classmethod
@@ -155,6 +158,13 @@ class TwoMapPlannerTests(unittest.TestCase):
             255,
             3,
         )
+        cv2.line(
+            masks["07_planning_map_free_white.png"],
+            (10, 70),
+            (10, 80),
+            0,
+            3,
+        )
         calibration = make_grid_calibration(0, 0, 90, 90)
         entrance = Portal((7, 4), (6, 4))
         exit_portal = Portal((1, 4), (2, 4))
@@ -196,6 +206,13 @@ class TwoMapPlannerTests(unittest.TestCase):
             255,
             3,
         )
+        cv2.line(
+            masks["07_planning_map_free_white.png"],
+            (10, 70),
+            (10, 80),
+            0,
+            3,
+        )
         calibration = make_grid_calibration(0, 0, 90, 90)
         normal_map = build_normal_maze_map(
             masks,
@@ -215,7 +232,7 @@ class TwoMapPlannerTests(unittest.TestCase):
         np.testing.assert_array_equal(diagnostic[85, 10], (240, 240, 240))
         np.testing.assert_array_equal(diagnostic[70, 45], (240, 240, 240))
 
-    def test_borderline_wall_evidence_remains_traversable(self) -> None:
+    def test_task1_collision_rule_blocks_even_borderline_wall_evidence(self) -> None:
         masks = self._blank_task1_masks(90)
         # Two pixels across this sampled boundary produce a borderline score:
         # retain the metadata, but do not create a graph wall.
@@ -224,6 +241,13 @@ class TwoMapPlannerTests(unittest.TestCase):
             (10, 72),
             (10, 73),
             255,
+            1,
+        )
+        cv2.line(
+            masks["07_planning_map_free_white.png"],
+            (10, 72),
+            (10, 73),
+            0,
             1,
         )
         normal_map = build_normal_maze_map(
@@ -237,8 +261,8 @@ class TwoMapPlannerTests(unittest.TestCase):
         edge = frozenset(((7, 0), (7, 1)))
 
         self.assertTrue(normal_map.walls[edge].uncertain)
-        self.assertFalse(normal_map.walls[edge].blocked)
-        self.assertIn((7, 1), normal_map.graph[(7, 0)])
+        self.assertTrue(normal_map.walls[edge].blocked)
+        self.assertNotIn((7, 1), normal_map.graph[(7, 0)])
 
     def test_obstacle_crop_is_independent_and_detects_only_inside_cylinder(self) -> None:
         _, _, obstacle_map = self._synthetic_maps()

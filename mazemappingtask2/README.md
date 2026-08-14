@@ -27,6 +27,10 @@ excluded from the fit. The resulting discrete 9 x 9 cell graph also removes
 that 5 x 5 interior, except for the two inside portal cells.
 The only permitted crossings are the programmed entrance and exit.
 
+Normal graph edges use the same three-pixel collision-band implementation as
+Task 1. Borderline directional-mask evidence after rectification is treated as
+blocked as a fail-safe, so transforming a mask cannot reopen a detected wall.
+
 The normal graph is solved with a heading-aware shortest-path search. Commands
 are generated directly from its logical cell path:
 
