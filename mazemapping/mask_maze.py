@@ -46,7 +46,7 @@ GAMMA = 1.21
 # Threshold applied to the black-hat response used for thin-wall recovery.
 # Lower it if thin walls are missing; raise it if too many fine details appear.
 # THIN_LINE_THRESHOLD = 18
-THIN_LINE_THRESHOLD = 22
+THIN_LINE_THRESHOLD = 16
 
 
 # Black-hat kernels for detecting horizontal and vertical dark lines.
@@ -54,8 +54,8 @@ HORIZONTAL_BLACKHAT_KERNEL = (17, 3)
 VERTICAL_BLACKHAT_KERNEL = (3, 17)
 
 # Directional opening suppresses non-line-shaped black-hat detections.
-HORIZONTAL_OPEN_KERNEL = (7, 1)
-VERTICAL_OPEN_KERNEL = (1, 7)
+HORIZONTAL_OPEN_KERNEL = (6, 1)
+VERTICAL_OPEN_KERNEL = (1, 6)
 
 # Morphological closing joins wall pieces interrupted by cyan tape.
 CLOSE_KERNEL_SIZE = 3
@@ -232,6 +232,29 @@ def create_thin_line_mask(
         cv2.getStructuringElement(cv2.MORPH_RECT, VERTICAL_OPEN_KERNEL),
         iterations=1,
     )
+
+    horizontal_close_kernel = cv2.getStructuringElement(
+    cv2.MORPH_RECT, (9, 1)
+)
+
+    vertical_close_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT, (1, 9)
+    )
+
+    horizontal_mask = cv2.morphologyEx(
+        horizontal_mask,
+        cv2.MORPH_CLOSE,
+        horizontal_close_kernel,
+    )
+
+    vertical_mask = cv2.morphologyEx(
+        vertical_mask,
+        cv2.MORPH_CLOSE,
+        vertical_close_kernel,
+    )
+
+
+
 
     horizontal_mask = cv2.bitwise_and(horizontal_mask, board_mask)
     vertical_mask = cv2.bitwise_and(vertical_mask, board_mask)

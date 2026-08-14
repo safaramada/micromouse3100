@@ -49,6 +49,7 @@ try:
         generate_fixed_grid_nodes,
         generate_nodes_from_positions,
     )
+    from wall_collision import segment_is_collision_free
 except ImportError as error:
     raise ImportError(
         "Put clip_grid.py, mask_maze.py, and path_planning_nodes.py in the "
@@ -110,24 +111,12 @@ def edge_is_collision_free(
     if first.blocked or second.blocked:
         return False
 
-    if check_thickness <= 0:
-        raise ValueError("Edge-check thickness must be greater than zero.")
-
-    test_band = np.zeros_like(planning_map)
-
-    cv2.line(
-        test_band,
+    return segment_is_collision_free(
+        planning_map,
         (first.x, first.y),
         (second.x, second.y),
-        255,
-        thickness=check_thickness,
-        lineType=cv2.LINE_8,
+        check_thickness,
     )
-
-    checked_pixels = test_band > 0
-    blocked_pixels = planning_map == 0
-
-    return not bool(np.any(checked_pixels & blocked_pixels))
 
 
 def build_collision_free_graph(
