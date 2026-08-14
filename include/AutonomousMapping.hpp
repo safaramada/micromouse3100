@@ -266,7 +266,7 @@ private:
     static constexpr uint16_t wallThresholdMm = 130;
     static constexpr uint16_t emergencyFrontDistanceMm = 45;
     static constexpr uint16_t emergencySideDistanceMm = 25;
-    static constexpr int16_t forwardPwm = 130;
+    static constexpr int16_t forwardPwm = 120;
     static constexpr float minimumFrontArrivalDistanceMm = 135.0f;
     static constexpr unsigned long sensorSettleTimeMs = 120;
     static constexpr unsigned long sensorRetryDelayMs = 40;
@@ -661,29 +661,20 @@ private:
 
     bool readWall(Lidar& lidar, bool& wall) {
         const uint16_t distanceMm = lidar.readDistance();
-        if (lidar.isReadingValid()) {
-            wall = distanceMm <= wallThresholdMm;
-            return true;
-        }
+        switch (lidar.getReadingResult()) {
+            case Lidar::READING_VALID:
+                wall = distanceMm <= wallThresholdMm;
+                return true;
 
-        if (!lidar.isReady() || lidar.timedOut()) {
-            return false;
-        }
-
-        // The unmodified VL6180X driver rejects all non-zero range statuses.
-        // Repeated no-target/overflow samples safely describe open space at a
-        // 130 mm wall threshold; underflow describes a very close wall.
-        switch (lidar.getRangeStatus()) {
-            case 6:   // early convergence, no valid target detected
-            case 7:   // maximum convergence, no valid target detected
-            case 13:  // raw range overflow
-            case 15:  // range overflow
+            case Lidar::READING_NO_TARGET:
                 wall = false;
                 return true;
-            case 12:  // raw underflow, target extremely close
-            case 14:  // underflow, target extremely close
+
+            case Lidar::READING_TOO_CLOSE:
                 wall = true;
                 return true;
+
+            case Lidar::READING_INVALID:
             default:
                 return false;
         }

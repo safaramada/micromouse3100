@@ -69,6 +69,10 @@ uint8_t findOledAddress() {
 void setup() {
     delay(1000);
 
+#if LIDAR_DIAGNOSTICS
+    Serial.begin(115200);
+#endif
+
     Wire.begin();
     const uint8_t oledAddress = findOledAddress();
 
@@ -103,11 +107,11 @@ void setup() {
     // Task 4.3: explore the full maze, return to the start through DFS
     // backtracking, then run the calculated shortest route to the goal.
     autonomousMapping.begin(
-        7,                              // start row
+        2,                              // start row
         7,                              // start column (first usable top cell)
         AutonomousMapping::WEST,       // start direction
-        4,                              // goal row
-        7                               // goal column
+        0,                              // goal row
+        2                               // goal column
     );
 
     if (oledReady) {

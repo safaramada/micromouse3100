@@ -9,6 +9,10 @@
 #include "Motor.hpp"
 #include "PIDController.hpp"
 
+#ifndef LIDAR_DIAGNOSTICS
+#define LIDAR_DIAGNOSTICS 0
+#endif
+
 namespace mtrn3100 {
 
 
@@ -188,37 +192,36 @@ public:
     }
 
 private:
+    struct SideLidarState {
+        uint16_t samples[3] = {0, 0, 0};
+        uint8_t sample_count = 0;
+        uint8_t next_sample = 0;
+        uint8_t invalid_streak = 0;
+        uint8_t close_confirmation_count = 0;
+        float filtered_distance_mm = 0;
+        bool filter_ready = false;
+        bool avoidance_active = false;
+    };
+
     bool senseWall(Lidar& lidar,
                    uint16_t threshold_mm,
                    bool& wall_present) {
         const uint16_t distance_mm = lidar.readDistance();
 
-        if (lidar.isReadingValid()) {
-            wall_present = distance_mm <= threshold_mm;
-            return true;
-        }
+        switch (lidar.getReadingResult()) {
+            case Lidar::READING_VALID:
+                wall_present = distance_mm <= threshold_mm;
+                return true;
 
-        if (!lidar.isReady() || lidar.timedOut()) {
-            return false;
-        }
-
-        // The original Task 1 driver rejects every non-zero range status.
-        // For mapping, several of those statuses specifically mean that no
-        // target was found within range, which means no adjacent wall.
-        switch (lidar.getRangeStatus()) {
-            case 6:   // early convergence: no target
-            case 7:   // maximum convergence: no target
-            case 8:   // no-target ignore threshold
-            case 13:  // raw range overflow: target too far away
-            case 15:  // range overflow: target too far away
+            case Lidar::READING_NO_TARGET:
                 wall_present = false;
                 return true;
 
-            case 12:  // raw underflow: target extremely close
-            case 14:  // underflow: target extremely close
+            case Lidar::READING_TOO_CLOSE:
                 wall_present = true;
                 return true;
 
+            case Lidar::READING_INVALID:
             default:
                 return false;
         }
@@ -339,10 +342,7 @@ private:
         }
 
         uint16_t left_reading_mm = left_lidar.readDistance();
-        bool left_wall = isValidSideWall(left_lidar, left_reading_mm);
-
         uint16_t right_reading_mm = right_lidar.readDistance();
-        bool right_wall = isValidSideWall(right_lidar, right_reading_mm);
 
         if (emergency_protection_enabled) {
             const bool left_emergency_close = isEmergencyClose(
@@ -399,35 +399,38 @@ private:
 
         float left_distance_mm = 0;
         float right_distance_mm = 0;
+        bool left_fresh_sample = false;
+        bool right_fresh_sample = false;
 
-        if (left_wall) {
-            left_distance_mm = filterSideDistance(
-                left_reading_mm,
-                filtered_left_distance_mm,
-                left_lidar_filter_ready
-            );
-        } else {
-            left_lidar_filter_ready = false;
-        }
+        const bool left_distance_available = updateSideDistance(
+            left_lidar,
+            left_reading_mm,
+            left_side_state,
+            left_distance_mm,
+            left_fresh_sample
+        );
+        const bool right_distance_available = updateSideDistance(
+            right_lidar,
+            right_reading_mm,
+            right_side_state,
+            right_distance_mm,
+            right_fresh_sample
+        );
 
-        if (right_wall) {
-            right_distance_mm = filterSideDistance(
-                right_reading_mm,
-                filtered_right_distance_mm,
-                right_lidar_filter_ready
-            );
-        } else {
-            right_lidar_filter_ready = false;
-        }
-
-        // A side contributes only when it is inside the minimum-clearance
-        // zone. At safe distances the side LiDARs do not influence steering.
-        float left_intrusion_mm = left_wall
-            ? max(0.0f, side_clearance_mm - left_distance_mm)
-            : 0.0f;
-        float right_intrusion_mm = right_wall
-            ? max(0.0f, side_clearance_mm - right_distance_mm)
-            : 0.0f;
+        // Two close samples engage avoidance. It then stays engaged until the
+        // wall clears a wider release threshold, preventing threshold chatter.
+        const float left_intrusion_mm = getSideIntrusion(
+            left_distance_available,
+            left_fresh_sample,
+            left_distance_mm,
+            left_side_state
+        );
+        const float right_intrusion_mm = getSideIntrusion(
+            right_distance_available,
+            right_fresh_sample,
+            right_distance_mm,
+            right_side_state
+        );
 
         // Positive correction steers away from the left wall; negative
         // correction steers away from the right. If both sides are close,
@@ -449,47 +452,187 @@ private:
             max_side_avoidance_correction
         );
 
-        return slewSideLidarAvoidanceCorrection(target_correction);
-    }
+        const float correction =
+            slewSideLidarAvoidanceCorrection(target_correction);
 
-    bool isValidSideWall(Lidar& lidar, uint16_t distance_mm) {
-        return lidar.isReadingValid() &&
-               distance_mm >= min_side_wall_mm &&
-               distance_mm <= max_side_wall_mm;
+#if LIDAR_DIAGNOSTICS
+        logLidarDiagnostics(
+            left_reading_mm,
+            right_reading_mm,
+            left_distance_mm,
+            right_distance_mm,
+            correction
+        );
+#endif
+
+        return correction;
     }
 
     bool isEmergencyClose(Lidar& lidar,
                           uint16_t distance_mm,
                           uint16_t threshold_mm) {
-        if (lidar.isReadingValid()) {
+        const Lidar::ReadingResult result = lidar.getReadingResult();
+        if (result == Lidar::READING_VALID) {
             return distance_mm > 0 && distance_mm <= threshold_mm;
         }
 
-        if (!lidar.isReady() || lidar.timedOut()) {
-            return false;
-        }
-
-        const uint8_t status = lidar.getRangeStatus();
-        return status == 12 || status == 14;
+        return result == Lidar::READING_TOO_CLOSE;
     }
 
-    float filterSideDistance(uint16_t reading_mm,
-                             float& filtered_distance_mm,
-                             bool& filter_ready) {
-        if (!filter_ready) {
-            filtered_distance_mm = static_cast<float>(reading_mm);
-            filter_ready = true;
-        } else if (reading_mm < filtered_distance_mm) {
-            // React immediately when clearance is shrinking. Only smooth the
-            // release so avoidance is not delayed as the robot nears a wall.
-            filtered_distance_mm = static_cast<float>(reading_mm);
-        } else {
-            filtered_distance_mm += side_lidar_filter_alpha *
-                (static_cast<float>(reading_mm) - filtered_distance_mm);
+    static uint16_t medianOfThree(uint16_t a,
+                                  uint16_t b,
+                                  uint16_t c) {
+        return a + b + c - min(a, min(b, c)) - max(a, max(b, c));
+    }
+
+    void clearSideLidarState(SideLidarState& state) {
+        state = SideLidarState();
+    }
+
+    bool updateSideDistance(Lidar& lidar,
+                            uint16_t reading_mm,
+                            SideLidarState& state,
+                            float& filtered_distance_mm,
+                            bool& fresh_sample) {
+        fresh_sample = false;
+        const Lidar::ReadingResult result = lidar.getReadingResult();
+
+        if (result == Lidar::READING_TOO_CLOSE) {
+            // Emergency protection handles this immediately when enabled. The
+            // zero-distance fallback also keeps avoidance safe when it is not.
+            state.invalid_streak = 0;
+            state.filtered_distance_mm = 0;
+            state.filter_ready = true;
+            filtered_distance_mm = 0;
+            fresh_sample = true;
+            return true;
         }
 
-        return filtered_distance_mm;
+        if (result == Lidar::READING_VALID &&
+            reading_mm >= min_side_wall_mm &&
+            reading_mm <= max_side_wall_mm) {
+            state.invalid_streak = 0;
+            fresh_sample = true;
+
+            state.samples[state.next_sample] = reading_mm;
+            state.next_sample = (state.next_sample + 1U) % 3U;
+            if (state.sample_count < 3U) {
+                state.sample_count++;
+            }
+
+            uint16_t median_mm = reading_mm;
+            if (state.sample_count == 2U) {
+                median_mm = static_cast<uint16_t>(
+                    (state.samples[0] + state.samples[1]) / 2U
+                );
+            } else if (state.sample_count == 3U) {
+                median_mm = medianOfThree(
+                    state.samples[0],
+                    state.samples[1],
+                    state.samples[2]
+                );
+            }
+
+            if (!state.filter_ready ||
+                median_mm < state.filtered_distance_mm) {
+                // The median rejects a lone low outlier, so a confirmed
+                // reduction in clearance can still be acted on immediately.
+                state.filtered_distance_mm = static_cast<float>(median_mm);
+                state.filter_ready = true;
+            } else {
+                state.filtered_distance_mm += side_lidar_filter_alpha *
+                    (static_cast<float>(median_mm) -
+                     state.filtered_distance_mm);
+            }
+
+            filtered_distance_mm = state.filtered_distance_mm;
+            return true;
+        }
+
+        if (result == Lidar::READING_INVALID && state.filter_ready &&
+            state.invalid_streak < max_held_invalid_samples) {
+            // Hold one prior result so a single I2C/ranging glitch cannot
+            // reset avoidance. It does not count as a confirmation sample.
+            state.invalid_streak++;
+            if (!state.avoidance_active) {
+                state.close_confirmation_count = 0;
+            }
+            filtered_distance_mm = state.filtered_distance_mm;
+            return true;
+        }
+
+        // A confirmed open/far result, or repeated invalid samples, releases
+        // this side rather than steering from stale data indefinitely.
+        clearSideLidarState(state);
+        return false;
     }
+
+    float getSideIntrusion(bool distance_available,
+                           bool fresh_sample,
+                           float distance_mm,
+                           SideLidarState& state) {
+        if (!distance_available) {
+            return 0;
+        }
+
+        const float release_distance_mm =
+            side_clearance_mm + side_avoidance_hysteresis_mm;
+
+        if (state.avoidance_active) {
+            if (fresh_sample && distance_mm >= release_distance_mm) {
+                state.avoidance_active = false;
+                state.close_confirmation_count = 0;
+            }
+        } else if (fresh_sample) {
+            if (distance_mm < side_clearance_mm) {
+                if (state.close_confirmation_count <
+                    side_close_confirmation_samples) {
+                    state.close_confirmation_count++;
+                }
+                if (state.close_confirmation_count >=
+                    side_close_confirmation_samples) {
+                    state.avoidance_active = true;
+                }
+            } else {
+                state.close_confirmation_count = 0;
+            }
+        }
+
+        if (!state.avoidance_active) {
+            return 0;
+        }
+
+        return max(0.0f, release_distance_mm - distance_mm);
+    }
+
+#if LIDAR_DIAGNOSTICS
+    void logLidarDiagnostics(uint16_t left_raw_mm,
+                             uint16_t right_raw_mm,
+                             float left_filtered_mm,
+                             float right_filtered_mm,
+                             float correction) {
+        const unsigned long now = millis();
+        if (now - last_lidar_diagnostic_ms < 100) {
+            return;
+        }
+        last_lidar_diagnostic_ms = now;
+
+        Serial.print(F("L raw/status/filter="));
+        Serial.print(left_raw_mm);
+        Serial.print('/');
+        Serial.print(left_lidar.getRangeStatus());
+        Serial.print('/');
+        Serial.print(left_filtered_mm, 1);
+        Serial.print(F(" R="));
+        Serial.print(right_raw_mm);
+        Serial.print('/');
+        Serial.print(right_lidar.getRangeStatus());
+        Serial.print('/');
+        Serial.print(right_filtered_mm, 1);
+        Serial.print(F(" correction="));
+        Serial.println(correction, 1);
+    }
+#endif
 
     float slewSideLidarAvoidanceCorrection(float target_correction) {
         float change = target_correction - current_side_avoidance_correction;
@@ -504,10 +647,8 @@ private:
     }
 
     void resetSideLidarAvoidanceState() {
-        left_lidar_filter_ready = false;
-        right_lidar_filter_ready = false;
-        filtered_left_distance_mm = 0;
-        filtered_right_distance_mm = 0;
+        clearSideLidarState(left_side_state);
+        clearSideLidarState(right_side_state);
         current_side_avoidance_correction = 0;
     }
 
@@ -608,28 +749,32 @@ private:
     float turn_tolerance_deg = 3;
     unsigned long turn_settle_start_ms = 0;
     const unsigned long turn_settle_time_ms = 100;
-    const float max_turn_pwm = 90.0;
-    const float min_turn_pwm = 55.0;
-    const float min_turn_near_target_pwm = 45.0;
+    const float max_turn_pwm = 82.0;
+    const float min_turn_pwm = 52.0;
+    const float min_turn_near_target_pwm = 42.0;
     const float turn_slow_angle_deg = 15.0;
-    const float max_forward_correction = 35.0;
+    const float max_forward_correction = 32.0;
     const float forward_slowdown_distance_mm = 90.0;
-    const float min_forward_approach_pwm = 100.0;
+    const float min_forward_approach_pwm = 95.0;
 
     bool side_lidar_avoidance_enabled = false;
     float side_clearance_mm = 50.0;
-    const float side_avoidance_kp = 0.67;
-    const float max_side_avoidance_correction = 18.0;
-    const float max_side_avoidance_step = 6.0;
+    const float side_avoidance_kp = 0.62;
+    const float max_side_avoidance_correction = 16.0;
+    const float max_side_avoidance_step = 5.0;
     const float side_avoidance_deadband_mm = 3.0;
+    const float side_avoidance_hysteresis_mm = 5.0;
     const float side_lidar_filter_alpha = 0.35;
+    const uint8_t side_close_confirmation_samples = 2;
+    const uint8_t max_held_invalid_samples = 1;
     const uint16_t min_side_wall_mm = 1;
     const uint16_t max_side_wall_mm = 100;
-    float filtered_left_distance_mm = 0;
-    float filtered_right_distance_mm = 0;
+    SideLidarState left_side_state;
+    SideLidarState right_side_state;
     float current_side_avoidance_correction = 0;
-    bool left_lidar_filter_ready = false;
-    bool right_lidar_filter_ready = false;
+#if LIDAR_DIAGNOSTICS
+    unsigned long last_lidar_diagnostic_ms = 0;
+#endif
 
 };
 

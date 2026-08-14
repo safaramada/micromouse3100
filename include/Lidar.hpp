@@ -16,6 +16,13 @@ public:
     static constexpr uint8_t DEFAULT_ADDRESS = 0x29;
     static constexpr uint8_t NO_XSHUT_PIN = 255;
 
+    enum ReadingResult : uint8_t {
+        READING_VALID,
+        READING_NO_TARGET,
+        READING_TOO_CLOSE,
+        READING_INVALID
+    };
+
 
     // Constructor for Lidar class
     Lidar(uint8_t address = DEFAULT_ADDRESS, uint8_t xshut_pin = NO_XSHUT_PIN)
@@ -86,7 +93,13 @@ public:
             return 0;
         }
 
-        distance = reading;
+        const int32_t corrected_reading =
+            static_cast<int32_t>(reading) + distance_offset_mm;
+        distance = static_cast<uint16_t>(constrain(
+            corrected_reading,
+            1L,
+            static_cast<long>(max_valid_distance_mm)
+        ));
         reading_valid = true;
         return distance;
     }
@@ -131,6 +144,36 @@ public:
         return range_status;
     }
 
+    ReadingResult getReadingResult() const {
+        if (ready && reading_valid) {
+            return READING_VALID;
+        }
+
+        if (!ready || timed_out) {
+            return READING_INVALID;
+        }
+
+        switch (range_status) {
+            case 6:   // early convergence: no target
+            case 7:   // maximum convergence: no target
+            case 8:   // no-target ignore threshold
+            case 13:  // raw range overflow
+            case 15:  // range overflow
+                return READING_NO_TARGET;
+
+            case 12:  // raw underflow
+            case 14:  // underflow
+                return READING_TOO_CLOSE;
+
+            default:
+                return READING_INVALID;
+        }
+    }
+
+    void setDistanceOffsetMM(int16_t offset_mm) {
+        distance_offset_mm = offset_mm;
+    }
+
     // For debug
     uint16_t getDistance() {
         return distance;
@@ -152,6 +195,7 @@ private:
     uint16_t max_valid_distance_mm = 200;
     uint16_t timeout_ms = 100;
     uint16_t distance = 0;
+    int16_t distance_offset_mm = 0;
 };
 
 }  // namespace mtrn3100
