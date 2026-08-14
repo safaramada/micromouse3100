@@ -18,6 +18,7 @@ from .task2_pipeline import (
     course_rectification_transform,
     project_points_to_original,
     rectify_course,
+    rectify_task1_mask_outputs,
 )
 from .two_map_planner import (
     GridCalibration,
@@ -182,17 +183,11 @@ def prepare_mapping_preview(config: DemoConfig) -> MappingPreview:
         config.output_pixels,
         config.board_corners,
     )
-    task1_masks = {
-        name: rectify_course(
-            output,
-            config.output_pixels,
-            config.board_corners,
-            interpolation=(
-                cv2.INTER_NEAREST if output.ndim == 2 else cv2.INTER_AREA
-            ),
-        )
-        for name, output in source_task1_masks.items()
-    }
+    task1_masks = rectify_task1_mask_outputs(
+        source_task1_masks,
+        config.output_pixels,
+        config.board_corners,
+    )
     clip_grid_result = None
     if config.grid_from_clips:
         image_transform = course_rectification_transform(

@@ -19,7 +19,9 @@ task1_masks = create_maze_masks(original_camera_image)
 
 The normal planner detects the cyan wall clips at full camera resolution,
 fits the same perspective-aware homography used by Task 1, and samples the
-horizontal and vertical cell boundaries from those Task 1 masks. Clip
+horizontal and vertical cell boundaries from those Task 1 masks. Binary masks
+are downsampled conservatively so thin wall pixels cannot disappear between
+source and planner resolutions. Clip
 observations strictly inside the configured continuous white-space region are
 excluded from the fit. The resulting discrete 9 x 9 cell graph also removes
 that 5 x 5 interior, except for the two inside portal cells.

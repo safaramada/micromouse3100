@@ -19,6 +19,7 @@ from .task2_pipeline import (
     project_points_to_original,
     repair_task1_wall_gaps,
     rectify_course,
+    rectify_task1_mask_outputs,
 )
 from .two_map_planner import (
     GridCalibration,
@@ -69,6 +70,7 @@ __all__ = [
     "project_points_to_original",
     "repair_task1_wall_gaps",
     "rectify_course",
+    "rectify_task1_mask_outputs",
     "GridCalibration",
     "NormalMazeMap",
     "ObstacleMap",

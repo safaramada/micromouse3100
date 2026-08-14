@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import heapq
 import math
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -270,6 +270,63 @@ def rectify_course(
         flags=interpolation,
         borderMode=cv2.BORDER_REPLICATE,
     )
+
+
+# These Task 1 outputs use white for detected obstacles.  They must be
+# transformed conservatively: nearest-neighbour downsampling can skip a thin
+# wall entirely even though it preserves the values of the pixels it keeps.
+_TASK1_BINARY_OBSTACLE_OUTPUTS = frozenset(
+    {
+        "02b_horizontal_line_mask.png",
+        "02c_vertical_line_mask.png",
+        "02d_thin_line_mask.png",
+        "03a_main_dark_mask.png",
+        "03_raw_dark_mask.png",
+        "04_closed_wall_mask.png",
+        "05_cleaned_wall_mask.png",
+        "06_occupancy_obstacles_white.png",
+    }
+)
+
+
+def rectify_task1_mask_outputs(
+    mask_outputs: Dict[str, np.ndarray],
+    output_pixels: int,
+    board_corners: Optional[Sequence[Sequence[float]]] = None,
+) -> Dict[str, np.ndarray]:
+    """Transform Task 1 outputs without dropping thin obstacle pixels.
+
+    Binary obstacle masks are area-resampled and then thresholded with an
+    ``any obstacle contribution means blocked`` rule.  The free-white
+    planning map is derived from the transformed occupancy map so its polarity
+    remains exact.  Preview and greyscale images use normal area resampling.
+    """
+    if not mask_outputs:
+        raise ValueError("Task 1 mask outputs must not be empty")
+
+    transformed: Dict[str, np.ndarray] = {}
+    for name, output in mask_outputs.items():
+        if output is None or output.size == 0:
+            raise ValueError(f"Task 1 mask output {name!r} is empty")
+        if name == "07_planning_map_free_white.png":
+            continue
+
+        rectified = rectify_course(
+            output,
+            output_pixels,
+            board_corners,
+            interpolation=cv2.INTER_AREA,
+        )
+        if name in _TASK1_BINARY_OBSTACLE_OUTPUTS:
+            rectified = np.where(rectified > 0, 255, 0).astype(np.uint8)
+        transformed[name] = rectified
+
+    occupancy_name = "06_occupancy_obstacles_white.png"
+    planning_name = "07_planning_map_free_white.png"
+    if occupancy_name not in transformed:
+        raise KeyError(f"Task 1 mask output is missing {occupancy_name}")
+    transformed[planning_name] = cv2.bitwise_not(transformed[occupancy_name])
+    return transformed
 
 
 def project_points_to_original(

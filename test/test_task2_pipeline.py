@@ -14,10 +14,35 @@ from mazemappingtask2 import (
     project_points_to_original,
     repair_task1_wall_gaps,
     rectify_course,
+    rectify_task1_mask_outputs,
 )
 
 
 class Task2PipelineTests(unittest.TestCase):
+    def test_task1_mask_rectification_preserves_thin_obstacles(self) -> None:
+        occupancy = np.zeros((12, 12), dtype=np.uint8)
+        occupancy[:, 4] = 255
+
+        transformed = rectify_task1_mask_outputs(
+            {
+                "06_occupancy_obstacles_white.png": occupancy,
+                "07_planning_map_free_white.png": cv2.bitwise_not(occupancy),
+            },
+            output_pixels=4,
+        )
+
+        rectified_occupancy = transformed[
+            "06_occupancy_obstacles_white.png"
+        ]
+        rectified_planning = transformed[
+            "07_planning_map_free_white.png"
+        ]
+        self.assertGreater(np.count_nonzero(rectified_occupancy), 0)
+        np.testing.assert_array_equal(
+            rectified_planning,
+            cv2.bitwise_not(rectified_occupancy),
+        )
+
     def test_short_wall_gaps_are_repaired_directionally(self) -> None:
         occupancy = np.zeros((30, 30), dtype=np.uint8)
         occupancy[10, 2:12] = 255

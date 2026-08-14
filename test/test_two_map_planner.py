@@ -448,6 +448,32 @@ class TwoMapPlannerTests(unittest.TestCase):
             output.obstacle_map.crop_bgr.shape,
         )
 
+    def test_maz4_thin_wall_survives_rectification_and_reroutes_path(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        config = DemoConfig(
+            image_file=project_root / "mazemappingtask2" / "maz4.png",
+            obstacle_top_left=(0, 2),
+            obstacle_size=5,
+            entrance=Portal((3, 1), (3, 2)),
+            exit=Portal((1, 7), (1, 6)),
+            start=(6, 0),
+            goal=(5, 8),
+        )
+
+        output = run_two_map_demo(config)
+        unsafe_edge = frozenset(((3, 7), (4, 7)))
+
+        self.assertTrue(output.normal_map.walls[unsafe_edge].blocked)
+        self.assertNotIn(
+            ((3, 7), (4, 7)),
+            list(zip(
+                output.route.normal_after_cells,
+                output.route.normal_after_cells[1:],
+            )),
+        )
+        self.assertIn((3, 8), output.route.normal_after_cells)
+        self.assertIn((4, 8), output.route.normal_after_cells)
+
     def test_coordinate_preview_does_not_require_valid_portals(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         image_file = project_root / "mazemappingtask2" / "maze2.png"

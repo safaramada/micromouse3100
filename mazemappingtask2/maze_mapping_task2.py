@@ -51,7 +51,11 @@ from mazemappingtask2 import (
     make_grid_calibration,
     plan_two_map_route,
 )
-from mazemappingtask2.task2_pipeline import project_points_to_original, rectify_course
+from mazemappingtask2.task2_pipeline import (
+    project_points_to_original,
+    rectify_course,
+    rectify_task1_mask_outputs,
+)
 
 
 Cell = Tuple[int, int]
@@ -144,19 +148,13 @@ def prepare_input(
         config.output_pixels,
         config.board_corners,
     )
-    # Detect walls at full camera resolution, then align those completed masks
-    # to planner coordinates. Nearest-neighbour preserves binary mask values.
-    task1_masks = {
-        name: rectify_course(
-            output,
-            config.output_pixels,
-            config.board_corners,
-            interpolation=(
-                cv2.INTER_NEAREST if output.ndim == 2 else cv2.INTER_AREA
-            ),
-        )
-        for name, output in source_task1_masks.items()
-    }
+    # Detect walls at full camera resolution, then conservatively align the
+    # completed masks to planner coordinates without losing thin wall pixels.
+    task1_masks = rectify_task1_mask_outputs(
+        source_task1_masks,
+        config.output_pixels,
+        config.board_corners,
+    )
     clip_grid_result = None
     if config.grid_from_clips:
         image_transform = course_rectification_transform(
@@ -306,7 +304,7 @@ def show_task1_mask(
     show: bool,
     output_directory: Optional[Path],
 ) -> None:
-    """Stage 1 visual: show the exact Task 1 mask output."""
+    """Stage 1 visual: show Task 1 walls after conservative rectification."""
     detected = mapping_preview.task1_masks["05_cleaned_wall_mask.png"] > 0
     detected_layer = mapping_preview.rectified_bgr.copy()
     detected_layer[detected] = (0, 0, 255)
@@ -319,7 +317,7 @@ def show_task1_mask(
     )
     preview = _combine_panels(
         (
-            "Task 1 detected walls (red)",
+            "Task 1 walls preserved after rectification (red)",
             detected_overlay,
         ),
         (
