@@ -103,11 +103,11 @@ void setup() {
     // Task 4.3: explore the full maze, return to the start through DFS
     // backtracking, then run the calculated shortest route to the goal.
     autonomousMapping.begin(
-        0,                              // start row
-        2,                              // start column (first usable top cell)
-        AutonomousMapping::SOUTH,       // start direction
-        0,                              // goal row
-        3                               // goal column
+        7,                              // start row
+        7,                              // start column (first usable top cell)
+        AutonomousMapping::WEST,       // start direction
+        4,                              // goal row
+        7                               // goal column
     );
 
     if (oledReady) {
