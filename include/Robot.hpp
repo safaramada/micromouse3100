@@ -50,7 +50,7 @@ public:
           imu(imu),
           wheel_radius_mm(wheel_radius_mm),
           wheel_base_mm(wheel_base_mm),
-          heading_pid(2.0, 0.0, 0.06),
+          heading_pid(2.3, 0.02, 0.06),
           distance_pid(1.2, 0.02, 0.04),
           turn_pid(1.6, 0.0, 0.10) {}
 
@@ -860,7 +860,7 @@ private:
     const float min_turn_pwm = 55.0;
     const float min_turn_near_target_pwm = 45.0;
     const float turn_slow_angle_deg = 15.0;
-    const float forward_heading_tolerance_deg = 1.0;
+    const float forward_heading_tolerance_deg = 0.7;
     const float max_imu_heading_correction = 20.0;
     const float max_forward_correction = 35.0;
     const float forward_slowdown_distance_mm = 90.0;

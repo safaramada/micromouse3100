@@ -55,7 +55,7 @@ StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
 
 // const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
-// const char command_string[] = "flfrffffrflfrflfrfrflffrflflfrfrffflfrfrflff";
+// const char command_string[] = "lrlrfffffffffffrrfffffffffffllfffffffffffrrfffffffffff";
 const char command_string[] = "fffffffffffffffffffffffff";
 
 bool i2cDevicePresent(uint8_t address) {
@@ -95,24 +95,22 @@ void printI2cDevices() {
     }
 }
 
-void drawOledFloat(uint8_t row, const char* label, float reading,
-                   uint8_t decimals = 2) {
-    char value[12];
+void drawOledLong(uint8_t row, const char* label, long reading) {
     char line[17];
 
-    dtostrf(reading, 7, decimals, value);
-    snprintf(line, sizeof(line), "%-8s%7s", label, value);
+    snprintf(line, sizeof(line), "%-8s%7ld", label, reading);
     oled.drawString(0, row, line);
 }
 
-void updateImuDisplay() {
+void updateEncoderDisplay() {
     if (!oledReady || millis() - lastOledUpdateMs < OLED_UPDATE_INTERVAL_MS) {
         return;
     }
 
     lastOledUpdateMs = millis();
 
-    drawOledFloat(0, "Yaw deg", imu.getYawDeg());
+    drawOledLong(0, "Left", leftEncoder.getCount());
+    drawOledLong(1, "Right", rightEncoder.getCount());
 }
 
 void setup() {
@@ -146,7 +144,8 @@ void setup() {
 
     if (oledReady) {
         oled.clearDisplay();
-        drawOledFloat(0, "Yaw deg", imu.getYawDeg());
+        drawOledLong(0, "Left", leftEncoder.getCount());
+        drawOledLong(1, "Right", rightEncoder.getCount());
     }
 
     delay(1000);
@@ -167,6 +166,6 @@ void setup() {
 
 void loop() {
     robot.update();
-    updateImuDisplay();
+    updateEncoderDisplay();
     delay(10);
 }
