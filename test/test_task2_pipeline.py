@@ -4,6 +4,10 @@ import cv2
 import numpy as np
 
 from computer.task4 import ContinuousPlanner, OccupancyGrid, PlannerConfig
+from mazemapping.mask_maze import (
+    keep_supported_line_components,
+    suppress_centre_seam_artifacts,
+)
 from mazemappingtask2 import (
     cell_center,
     clear_endpoint_footprints,
@@ -19,6 +23,42 @@ from mazemappingtask2 import (
 
 
 class Task2PipelineTests(unittest.TestCase):
+    def test_centre_seams_are_removed_without_cutting_crossing_walls(self) -> None:
+        mask = np.zeros((101, 101), dtype=np.uint8)
+        mask[:, 50] = 255
+        mask[50, :] = 255
+        mask[25, 5:96] = 255
+        mask[5:96, 25] = 255
+
+        cleaned = suppress_centre_seam_artifacts(mask, half_width=4)
+
+        self.assertEqual(int(cleaned[10, 50]), 0)
+        self.assertEqual(int(cleaned[50, 10]), 0)
+        self.assertEqual(int(cleaned[50, 50]), 0)
+        self.assertTrue(np.all(cleaned[25, 46:55] == 255))
+        self.assertTrue(np.all(cleaned[46:55, 25] == 255))
+
+    def test_centre_seam_suppression_preserves_broad_objects(self) -> None:
+        mask = np.zeros((101, 101), dtype=np.uint8)
+        cv2.circle(mask, (50, 50), 14, 255, -1)
+
+        cleaned = suppress_centre_seam_artifacts(mask, half_width=8)
+
+        self.assertEqual(int(cleaned[50, 50]), 255)
+        self.assertGreater(np.count_nonzero(cleaned), 500)
+
+    def test_weak_thin_line_requires_stronger_wall_support(self) -> None:
+        candidates = np.zeros((30, 40), dtype=np.uint8)
+        candidates[8, 3:16] = 255
+        candidates[20, 22:36] = 255
+        support = np.zeros_like(candidates)
+        support[8, 10] = 255
+
+        filtered = keep_supported_line_components(candidates, support)
+
+        self.assertTrue(np.all(filtered[8, 3:16] == 255))
+        self.assertTrue(np.all(filtered[20, 22:36] == 0))
+
     def test_task1_mask_rectification_preserves_thin_obstacles(self) -> None:
         occupancy = np.zeros((12, 12), dtype=np.uint8)
         occupancy[:, 4] = 255
