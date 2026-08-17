@@ -52,6 +52,31 @@ DEFAULT_MERGE_DISTANCE = 16.0
 DEFAULT_RANSAC_THRESHOLD = 5.0
 
 
+def create_cyan_clip_mask(
+    image: np.ndarray,
+    hue_min: int = DEFAULT_HUE_MIN,
+    hue_max: int = DEFAULT_HUE_MAX,
+    saturation_min: int = DEFAULT_SATURATION_MIN,
+    value_min: int = DEFAULT_VALUE_MIN,
+) -> np.ndarray:
+    """Return the cleaned binary HSV mask used for cyan-clip detection."""
+    if image is None or image.size == 0:
+        raise ValueError("The supplied image is empty.")
+
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    cyan_mask = cv2.inRange(
+        hsv,
+        (hue_min, saturation_min, value_min),
+        (hue_max, 255, 255),
+    )
+    return cv2.morphologyEx(
+        cyan_mask,
+        cv2.MORPH_CLOSE,
+        np.ones((3, 3), dtype=np.uint8),
+        iterations=1,
+    )
+
+
 def detect_cyan_clip_components(
     image: np.ndarray,
     hue_min: int = DEFAULT_HUE_MIN,
@@ -63,20 +88,12 @@ def detect_cyan_clip_components(
     maximum_component_size: int = DEFAULT_MAX_COMPONENT_SIZE,
 ) -> List[ClipComponent]:
     """Detect small cyan connected components that look like wall clips."""
-    if image is None or image.size == 0:
-        raise ValueError("The supplied image is empty.")
-
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    cyan_mask = cv2.inRange(
-        hsv,
-        (hue_min, saturation_min, value_min),
-        (hue_max, 255, 255),
-    )
-    cyan_mask = cv2.morphologyEx(
-        cyan_mask,
-        cv2.MORPH_CLOSE,
-        np.ones((3, 3), dtype=np.uint8),
-        iterations=1,
+    cyan_mask = create_cyan_clip_mask(
+        image,
+        hue_min,
+        hue_max,
+        saturation_min,
+        value_min,
     )
 
     component_count, _, statistics, centroids = (

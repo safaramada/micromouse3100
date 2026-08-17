@@ -4,8 +4,11 @@ import cv2
 import numpy as np
 
 from computer.task4 import ContinuousPlanner, OccupancyGrid, PlannerConfig
+from mazemapping.clip_grid import create_cyan_clip_mask
 from mazemapping.mask_maze import (
+    create_maze_masks,
     keep_supported_line_components,
+    suppress_bright_small_components,
     suppress_centre_seam_artifacts,
 )
 from mazemappingtask2 import (
@@ -23,6 +26,42 @@ from mazemappingtask2 import (
 
 
 class Task2PipelineTests(unittest.TestCase):
+    def test_cyan_clip_mask_exposes_only_matching_hsv_pixels(self) -> None:
+        image = np.zeros((30, 40, 3), dtype=np.uint8)
+        image[5:15, 5:15] = (255, 255, 0)
+        image[5:15, 25:35] = (0, 0, 255)
+
+        mask = create_cyan_clip_mask(image)
+
+        self.assertEqual(int(mask[10, 10]), 255)
+        self.assertEqual(int(mask[10, 30]), 0)
+
+    def test_resolution_normalised_masks_return_input_dimensions(self) -> None:
+        image = np.full((60, 80, 3), 230, dtype=np.uint8)
+        cv2.line(image, (10, 20), (70, 20), (20, 20, 20), 2)
+
+        outputs = create_maze_masks(image, canonical_size=200)
+
+        for output in outputs.values():
+            self.assertEqual(output.shape[:2], image.shape[:2])
+        np.testing.assert_array_equal(
+            outputs["07_planning_map_free_white.png"],
+            cv2.bitwise_not(outputs["06_occupancy_obstacles_white.png"]),
+        )
+
+    def test_bright_small_artifact_is_removed_without_removing_dark_wall(self) -> None:
+        mask = np.zeros((50, 80), dtype=np.uint8)
+        mask[10:20, 10:25] = 255
+        mask[10:20, 50:65] = 255
+        grayscale = np.full(mask.shape, 230, dtype=np.uint8)
+        grayscale[10:20, 10:25] = 140
+        grayscale[10:20, 50:65] = 180
+
+        cleaned = suppress_bright_small_components(mask, grayscale)
+
+        self.assertTrue(np.all(cleaned[10:20, 10:25] == 255))
+        self.assertTrue(np.all(cleaned[10:20, 50:65] == 0))
+
     def test_centre_seams_are_removed_without_cutting_crossing_walls(self) -> None:
         mask = np.zeros((101, 101), dtype=np.uint8)
         mask[:, 50] = 255

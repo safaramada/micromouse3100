@@ -29,6 +29,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+try:
+    from .clip_grid import create_cyan_clip_mask
+except ImportError:  # Support direct ``python mask_maze.py`` execution.
+    from clip_grid import create_cyan_clip_mask
+
 
 # ------------------------- Parameters to tune ------------------------- #
 
@@ -42,6 +47,12 @@ CLAHE_TILE_GRID = (8, 8)
 
 # Gamma > 1 darkens mid-grey/dark pixels.
 GAMMA = 1.21
+
+# Run the geometry-sensitive morphology at one reference resolution. Camera
+# exports of the same maze have ranged from roughly 670 px to 1160 px square;
+# fixed pixel kernels otherwise behave differently on the low-resolution pair.
+# Outputs are transformed back to the supplied image dimensions afterwards.
+MASK_CANONICAL_SIZE = 1000
 
 # Hysteresis thresholds for black-hat thin-wall recovery. Weak line pixels are
 # retained only when their connected component reaches stronger line evidence
@@ -70,6 +81,12 @@ MIN_COMPONENT_AREA = 100
 # Long, thin regions can also be kept even when their area is small.
 MIN_COMPONENT_LENGTH = 15
 MIN_THIN_COMPONENT_AREA = 8
+
+# A short black-hat response can also be caused by a light floor mark. Only
+# small isolated components receive this absolute-intensity check; full walls
+# and Task 2 cylinders are deliberately outside its scope.
+MAX_SMALL_COMPONENT_AREA = 250
+MAX_SMALL_COMPONENT_MEDIAN_GRAY = 165
 
 # The photographed board has centre panel seams that are not obstacles.
 # Suppression is limited to the known centre strips and protects crossing
@@ -178,6 +195,34 @@ def remove_small_components(
         if is_large or is_long_and_thin:
             cleaned[labels == component_id] = 255
 
+    return cleaned
+
+
+def suppress_bright_small_components(
+    binary_mask: np.ndarray,
+    grayscale: np.ndarray,
+    maximum_area: int = MAX_SMALL_COMPONENT_AREA,
+    maximum_median_gray: int = MAX_SMALL_COMPONENT_MEDIAN_GRAY,
+) -> np.ndarray:
+    """Discard small isolated line responses that are too bright to be walls."""
+    if binary_mask.shape != grayscale.shape:
+        raise ValueError("binary_mask and grayscale must have matching shapes")
+
+    component_count, labels, statistics, _ = cv2.connectedComponentsWithStats(
+        binary_mask,
+        connectivity=8,
+    )
+    cleaned = binary_mask.copy()
+    for component_id in range(1, component_count):
+        area = int(statistics[component_id, cv2.CC_STAT_AREA])
+        if area > maximum_area:
+            continue
+        component_values = grayscale[labels == component_id]
+        if (
+            component_values.size
+            and float(np.median(component_values)) > maximum_median_gray
+        ):
+            cleaned[labels == component_id] = 0
     return cleaned
 
 
@@ -397,7 +442,7 @@ def create_thin_line_mask(
     )
 
 
-def create_maze_masks(
+def _create_maze_masks_native(
     image: np.ndarray,
     dark_threshold: int = DARK_THRESHOLD,
     thin_line_threshold: int = THIN_LINE_THRESHOLD,
@@ -411,6 +456,7 @@ def create_maze_masks(
     board_mask, board_polygon = create_board_mask(height, width)
 
     grayscale = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    cyan_clip_mask = create_cyan_clip_mask(image)
 
     # Increase local contrast so thin dark walls stand out from the floor.
     clahe = cv2.createCLAHE(
@@ -500,6 +546,10 @@ def create_maze_masks(
         np.ones((3, 3), dtype=np.uint8),
         iterations=1,
     )
+    cleaned_wall_mask = suppress_bright_small_components(
+        cleaned_wall_mask,
+        grayscale,
+    )
 
     # Occupancy convention: white means blocked.
     occupancy_map = cleaned_wall_mask.copy()
@@ -550,6 +600,7 @@ def create_maze_masks(
         "02b_horizontal_line_mask.png": horizontal_line_mask,
         "02c_vertical_line_mask.png": vertical_line_mask,
         "02d_thin_line_mask.png": thin_line_mask,
+        "02e_cyan_clip_mask.png": cyan_clip_mask,
         "03a_main_dark_mask.png": main_dark_mask,
         "03_raw_dark_mask.png": raw_dark_mask,
         "04_closed_wall_mask.png": closed_wall_mask,
@@ -558,6 +609,100 @@ def create_maze_masks(
         "07_planning_map_free_white.png": planning_map,
         "08_mask_overlay.png": overlay,
     }
+
+
+_BINARY_OUTPUTS = frozenset(
+    {
+        "02b_horizontal_line_mask.png",
+        "02c_vertical_line_mask.png",
+        "02d_thin_line_mask.png",
+        "02e_cyan_clip_mask.png",
+        "03a_main_dark_mask.png",
+        "03_raw_dark_mask.png",
+        "04_closed_wall_mask.png",
+        "05_cleaned_wall_mask.png",
+        "06_occupancy_obstacles_white.png",
+    }
+)
+
+
+def create_maze_masks(
+    image: np.ndarray,
+    dark_threshold: int = DARK_THRESHOLD,
+    thin_line_threshold: int = THIN_LINE_THRESHOLD,
+    gamma: float = GAMMA,
+    canonical_size: int | None = MASK_CANONICAL_SIZE,
+) -> dict[str, np.ndarray]:
+    """Create masks with resolution-normalised morphology.
+
+    The photographed rig fills the source frame in the supplied captures, so
+    resizing it to a common square makes the fixed black-hat, opening, closing,
+    and component kernels represent consistent physical sizes. Every returned
+    output is restored to the input dimensions for Task 1 compatibility.
+    Pass ``canonical_size=None`` to retain native-resolution behaviour.
+    """
+    if image is None or image.size == 0:
+        raise ValueError("The supplied image is empty or could not be read.")
+    if canonical_size is None:
+        return _create_maze_masks_native(
+            image,
+            dark_threshold,
+            thin_line_threshold,
+            gamma,
+        )
+    if canonical_size < 2:
+        raise ValueError("canonical_size must be at least 2 or None")
+
+    height, width = image.shape[:2]
+    if height == canonical_size and width == canonical_size:
+        return _create_maze_masks_native(
+            image,
+            dark_threshold,
+            thin_line_threshold,
+            gamma,
+        )
+
+    normalised = cv2.resize(
+        image,
+        (canonical_size, canonical_size),
+        interpolation=(
+            cv2.INTER_AREA
+            if canonical_size < max(height, width)
+            else cv2.INTER_CUBIC
+        ),
+    )
+    normalised_outputs = _create_maze_masks_native(
+        normalised,
+        dark_threshold,
+        thin_line_threshold,
+        gamma,
+    )
+
+    restored: dict[str, np.ndarray] = {}
+    for name, output in normalised_outputs.items():
+        resized = cv2.resize(
+            output,
+            (width, height),
+            interpolation=cv2.INTER_AREA,
+        )
+        if name in _BINARY_OUTPUTS:
+            resized = np.where(resized > 0, 255, 0).astype(np.uint8)
+        restored[name] = resized
+
+    occupancy_name = "06_occupancy_obstacles_white.png"
+    planning_name = "07_planning_map_free_white.png"
+    restored[planning_name] = cv2.bitwise_not(restored[occupancy_name])
+
+    coloured_overlay = image.copy()
+    coloured_overlay[restored[occupancy_name] == 255] = (0, 0, 255)
+    restored["08_mask_overlay.png"] = cv2.addWeighted(
+        image,
+        0.68,
+        coloured_overlay,
+        0.32,
+        0,
+    )
+    return restored
 
 
 def save_outputs(outputs: dict[str, np.ndarray], output_directory: Path) -> None:

@@ -272,14 +272,15 @@ def rectify_course(
     )
 
 
-# These Task 1 outputs use white for detected obstacles.  They must be
-# transformed conservatively: nearest-neighbour downsampling can skip a thin
-# wall entirely even though it preserves the values of the pixels it keeps.
-_TASK1_BINARY_OBSTACLE_OUTPUTS = frozenset(
+# These Task 1 outputs are binary masks. They must be transformed
+# conservatively: nearest-neighbour downsampling can skip a thin feature
+# entirely even though it preserves the values of the pixels it keeps.
+_TASK1_BINARY_OUTPUTS = frozenset(
     {
         "02b_horizontal_line_mask.png",
         "02c_vertical_line_mask.png",
         "02d_thin_line_mask.png",
+        "02e_cyan_clip_mask.png",
         "03a_main_dark_mask.png",
         "03_raw_dark_mask.png",
         "04_closed_wall_mask.png",
@@ -317,7 +318,7 @@ def rectify_task1_mask_outputs(
             board_corners,
             interpolation=cv2.INTER_AREA,
         )
-        if name in _TASK1_BINARY_OBSTACLE_OUTPUTS:
+        if name in _TASK1_BINARY_OUTPUTS:
             rectified = np.where(rectified > 0, 255, 0).astype(np.uint8)
         transformed[name] = rectified
 
