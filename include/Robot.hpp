@@ -152,6 +152,11 @@ public:
         command_pause_active = false;
         base_pwm = constrain(abs(pwm), 80, 180);
 
+        // Keep one absolute heading reference for the whole command string.
+        // Building each turn from the measured yaw would carry the residual
+        // error from one movement into every movement that follows.
+        target_yaw_deg = imu.getYawDeg();
+
         stopMotors();
         resetSideLidarAvoidanceState();
     }
@@ -483,16 +488,17 @@ private:
 
             target_distance_mm =
                 maze_cell_distance_mm * active_forward_command_count;
-            target_yaw_deg = imu.getYawDeg();
 
-            heading_pid.reset();
+            const float initial_heading_error =
+                IMU::wrapAngleDeg(imu.getYawDeg() - target_yaw_deg);
+            heading_pid.reset(initial_heading_error);
             resetSideLidarAvoidanceState();
             command_state = COMMAND_FORWARD;
         }
 
         else if (command == 'l' || command == 'L') {
             target_yaw_deg =
-                IMU::wrapAngleDeg(imu.getYawDeg() + 90.0);
+                IMU::wrapAngleDeg(target_yaw_deg + 90.0);
 
             beginTurnController();
             command_state = COMMAND_TURN;
@@ -500,7 +506,7 @@ private:
 
         else if (command == 'r' || command == 'R') {
             target_yaw_deg =
-                IMU::wrapAngleDeg(imu.getYawDeg() - 90.0);
+                IMU::wrapAngleDeg(target_yaw_deg - 90.0);
 
             beginTurnController();
             command_state = COMMAND_TURN;
@@ -568,6 +574,19 @@ private:
             IMU::wrapAngleDeg(imu.getYawDeg() - target_yaw_deg);
 
         float imu_correction = heading_pid.computeFromError(heading_error);
+
+        // Ignore small IMU noise while the robot is within the accepted
+        // heading band. Outside it, gently change the wheel-speed balance to
+        // steer back toward the heading held at the start of the route.
+        if (fabs(heading_error) <= forward_heading_tolerance_deg) {
+            imu_correction = 0;
+        } else {
+            imu_correction = constrain(
+                imu_correction,
+                -max_imu_heading_correction,
+                max_imu_heading_correction
+            );
+        }
 
         float correction =
             imu_correction + lidar_correction;
@@ -748,11 +767,7 @@ private:
             return false;
         }
 
-        if (next_command == '\0') {
-            finishTask();
-        } else {
-            completeCurrentCommand(active_forward_command_count);
-        }
+        completeCurrentCommand(active_forward_command_count);
 
         return true;
     }
@@ -779,13 +794,7 @@ private:
 
         command_index += command_count;
 
-        char next_command = command_string[command_index];
-        bool next_is_turn =
-            next_command == 'l' || next_command == 'L' ||
-            next_command == 'r' || next_command == 'R';
-
-        command_pause_active =
-            command_state == COMMAND_FORWARD && next_is_turn;
+        command_pause_active = true;
         command_pause_start_ms = millis();
         command_state = COMMAND_READY;
     }
@@ -844,13 +853,15 @@ private:
     float start_left_rotation = 0;
     float start_right_rotation = 0;
     // float wall_tolerance_mm = 5;
-    float turn_tolerance_deg = 3;
+    float turn_tolerance_deg = 1;
     unsigned long turn_settle_start_ms = 0;
     const unsigned long turn_settle_time_ms = 100;
     const float max_turn_pwm = 90.0;
     const float min_turn_pwm = 55.0;
     const float min_turn_near_target_pwm = 45.0;
     const float turn_slow_angle_deg = 15.0;
+    const float forward_heading_tolerance_deg = 1.0;
+    const float max_imu_heading_correction = 20.0;
     const float max_forward_correction = 35.0;
     const float forward_slowdown_distance_mm = 90.0;
     const float min_forward_approach_pwm = 100.0;
@@ -895,7 +906,7 @@ private:
     CommandState command_state = COMMAND_READY;
     bool command_pause_active = false;
     unsigned long command_pause_start_ms = 0;
-    const unsigned long command_pause_time_ms = 80;
+    const unsigned long command_pause_time_ms = 1000;
     const float maze_cell_distance_mm = 180.0;
 
 };

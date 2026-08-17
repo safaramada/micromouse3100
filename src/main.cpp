@@ -15,6 +15,9 @@ using namespace mtrn3100;
 
 U8X8_SSD1306_128X64_NONAME_HW_I2C oled(U8X8_PIN_NONE);
 bool oledReady = false;
+uint32_t lastOledUpdateMs = 0;
+
+constexpr uint16_t OLED_UPDATE_INTERVAL_MS = 100;
 
 // Replace these pins with your real wiring
 Motor leftMotor(11, 12);
@@ -52,7 +55,8 @@ StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
 
 // const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
-const char command_string[] = "flfrffffrflfrflfrfrflffrflflfrfrffflfrfrflff";
+// const char command_string[] = "flfrffffrflfrflfrfrflffrflflfrfrffflfrfrflff";
+const char command_string[] = "fffffffffffffffffffffffff";
 
 bool i2cDevicePresent(uint8_t address) {
     Wire.beginTransmission(address);
@@ -91,6 +95,26 @@ void printI2cDevices() {
     }
 }
 
+void drawOledFloat(uint8_t row, const char* label, float reading,
+                   uint8_t decimals = 2) {
+    char value[12];
+    char line[17];
+
+    dtostrf(reading, 7, decimals, value);
+    snprintf(line, sizeof(line), "%-8s%7s", label, value);
+    oled.drawString(0, row, line);
+}
+
+void updateImuDisplay() {
+    if (!oledReady || millis() - lastOledUpdateMs < OLED_UPDATE_INTERVAL_MS) {
+        return;
+    }
+
+    lastOledUpdateMs = millis();
+
+    drawOledFloat(0, "Yaw deg", imu.getYawDeg());
+}
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
@@ -122,8 +146,7 @@ void setup() {
 
     if (oledReady) {
         oled.clearDisplay();
-        oled.drawString(0, 0, "Micromouse");
-        oled.drawString(0, 1, "Ready!!!");
+        drawOledFloat(0, "Yaw deg", imu.getYawDeg());
     }
 
     delay(1000);
@@ -144,5 +167,6 @@ void setup() {
 
 void loop() {
     robot.update();
+    updateImuDisplay();
     delay(10);
 }
