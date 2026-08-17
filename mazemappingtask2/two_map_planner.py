@@ -28,6 +28,7 @@ from computer.task4 import (
     PlanResult,
     PlanStatus,
     PlannerConfig,
+    PointMM,
 )
 from mazemapping.clip_grid import ClipGridResult, infer_clip_grid, project_points
 from mazemapping.mask_maze import create_maze_masks
@@ -686,10 +687,10 @@ def build_normal_maze_map(
                     3,
                 )
                 evidence = WallEvidence(
-                    # The shared Task 1 collision rule is authoritative.  A
-                    # directional-mask hit that became borderline during
-                    # rectification is also fail-safe: never reopen a wall.
-                    blocked=(not collision_free) or evidence.uncertain,
+                    # Match Task 1 exactly: directional coverage remains
+                    # diagnostic metadata and cannot override its strict
+                    # three-pixel collision result.
+                    blocked=not collision_free,
                     uncertain=evidence.uncertain,
                     score=evidence.score,
                     coverage=evidence.coverage,
@@ -1021,6 +1022,44 @@ def _obstacle_final_heading(
     return heading
 
 
+def _portal_boundary_point(portal: Portal, obstacle_map: ObstacleMap) -> Point:
+    """Return the portal midpoint on the continuous crop boundary."""
+    x, y = obstacle_map.entrance_local
+    row_change = portal.outside_cell[0] - portal.inside_cell[0]
+    column_change = portal.outside_cell[1] - portal.inside_cell[1]
+    if row_change > 0:
+        return x, obstacle_map.grid.height - 1
+    if row_change < 0:
+        return x, 0
+    if column_change > 0:
+        return obstacle_map.grid.width - 1, y
+    if column_change < 0:
+        return 0, y
+    raise ValueError("portal cells must share one cardinal boundary")
+
+
+def _outside_portal_point(
+    portal: Portal,
+    boundary_point: Point,
+    inside_point: Point,
+) -> Point:
+    """Reflect the inside-cell centre across its portal boundary."""
+    portal.validate()
+    return (
+        2 * boundary_point[0] - inside_point[0],
+        2 * boundary_point[1] - inside_point[1],
+    )
+
+
+def _local_point_mm(point: Point, obstacle_map: ObstacleMap) -> PointMM:
+    """Convert a local image point, including one outside the crop, to mm."""
+    return PointMM(
+        point[0] * obstacle_map.resolution_mm,
+        (obstacle_map.grid.height - 1 - point[1])
+        * obstacle_map.resolution_mm,
+    )
+
+
 def plan_two_map_route(
     normal_map: NormalMazeMap,
     obstacle_map: ObstacleMap,
@@ -1036,10 +1075,14 @@ def plan_two_map_route(
     """Run normal graph -> obstacle RRT* -> normal graph and join commands."""
     if not math.isfinite(obstacle_distance_scale) or obstacle_distance_scale <= 0.0:
         raise ValueError("obstacle_distance_scale must be positive and finite")
+    # Stop at the normal cell immediately outside the portal. The old route
+    # drove one fixed `f` to the inside-cell centre before starting RRT*, which
+    # fails whenever a correctly detected obstacle blocks that centre. The
+    # continuous command section now owns the measured portal-entry movement.
     before = shortest_cell_path(
         normal_map.graph,
         start,
-        normal_map.entrance.inside_cell,
+        normal_map.entrance.outside_cell,
     )
     after = shortest_cell_path(
         normal_map.graph,
@@ -1062,9 +1105,10 @@ def plan_two_map_route(
         ),
         max_waypoint_spacing_mm=rrt_max_waypoint_spacing_mm,
     )
+    entrance_boundary = _portal_boundary_point(normal_map.entrance, obstacle_map)
     obstacle_result = planner.plan(
         obstacle_map.grid,
-        obstacle_map.entrance_local,
+        entrance_boundary,
         obstacle_map.exit_local,
     )
     if not obstacle_result.succeeded:
@@ -1072,8 +1116,17 @@ def plan_two_map_route(
             f"continuous obstacle planning failed: {obstacle_result.status.value}"
         )
 
+    outside_local = _outside_portal_point(
+        normal_map.entrance,
+        entrance_boundary,
+        obstacle_map.entrance_local,
+    )
+    entry_waypoints_mm = [
+        _local_point_mm(outside_local, obstacle_map),
+        *obstacle_result.waypoints_mm,
+    ]
     obstacle_commands = planner.make_motion_commands(
-        obstacle_result.waypoints_mm,
+        entry_waypoints_mm,
         entrance_heading,
     )
     # Physical calibration applies only to positive continuous-section drive

@@ -120,9 +120,15 @@ class TwoMapPlannerTests(unittest.TestCase):
                 )
 
     def assert_route_joins(self, normal_map, route, tolerance: float = 1.5) -> None:
-        entrance_full = normal_map.calibration.centre(
-            route.normal_before_cells[-1]
+        self.assertEqual(
+            route.normal_before_cells[-1],
+            normal_map.entrance.outside_cell,
         )
+        entrance_segment = normal_map.calibration.boundary_segment(
+            normal_map.entrance.outside_cell,
+            normal_map.entrance.inside_cell,
+        )
+        entrance_full = tuple(np.mean(entrance_segment, axis=0))
         exit_full = normal_map.calibration.centre(route.normal_after_cells[0])
         self.assertLessEqual(
             math.dist(entrance_full, route.obstacle_waypoints_full[0]),
@@ -132,6 +138,37 @@ class TwoMapPlannerTests(unittest.TestCase):
             math.dist(exit_full, route.obstacle_waypoints_full[-1]),
             tolerance,
         )
+
+    def test_blocked_inside_entrance_uses_portal_entry_instead_of_fixed_f(self) -> None:
+        _, normal_map, obstacle_map = self._synthetic_maps()
+        blocked = obstacle_map.occupancy_mask.copy()
+        cv2.circle(blocked, obstacle_map.entrance_local, 3, 255, -1)
+        obstacle_map.occupancy_mask = blocked
+        obstacle_map.grid = obstacle_map.grid.from_rows(
+            blocked > 0,
+            obstacle_map.resolution_mm,
+        )
+
+        route = plan_two_map_route(
+            normal_map,
+            obstacle_map,
+            start=(8, 4),
+            goal=(0, 4),
+            initial_heading_deg=90.0,
+            robot_radius_mm=0.0,
+            safety_margin_mm=0.0,
+        )
+
+        before, obstacle_and_after = route.command[1:-2].split(",[", maxsplit=1)
+        obstacle = obstacle_and_after.rsplit("],", maxsplit=1)[0]
+        first_distance = float(MOTION_PAIR_PATTERN.findall(obstacle)[0][1])
+        self.assertTrue(route.succeeded)
+        self.assertEqual(
+            route.normal_before_cells[-1],
+            normal_map.entrance.outside_cell,
+        )
+        self.assertEqual(before.count("f"), len(route.normal_before_cells) - 1)
+        self.assertGreater(first_distance, 0.0)
 
     def test_normal_cell_commands_are_exact_lfr_per_cell(self) -> None:
         cells = [(8, 0), (7, 0), (7, 1), (7, 2), (8, 2)]
@@ -263,6 +300,29 @@ class TwoMapPlannerTests(unittest.TestCase):
         self.assertTrue(normal_map.walls[edge].uncertain)
         self.assertTrue(normal_map.walls[edge].blocked)
         self.assertNotIn((7, 1), normal_map.graph[(7, 0)])
+
+    def test_borderline_directional_evidence_does_not_override_task1(self) -> None:
+        masks = self._blank_task1_masks(90)
+        cv2.line(
+            masks["02c_vertical_line_mask.png"],
+            (10, 72),
+            (10, 73),
+            255,
+            1,
+        )
+        normal_map = build_normal_maze_map(
+            masks,
+            make_grid_calibration(0, 0, 90, 90),
+            obstacle_top_left=(2, 2),
+            obstacle_size=5,
+            entrance=Portal((7, 4), (6, 4)),
+            exit=Portal((1, 4), (2, 4)),
+        )
+        edge = frozenset(((7, 0), (7, 1)))
+
+        self.assertTrue(normal_map.walls[edge].uncertain)
+        self.assertFalse(normal_map.walls[edge].blocked)
+        self.assertIn((7, 1), normal_map.graph[(7, 0)])
 
     def test_obstacle_crop_is_independent_and_detects_only_inside_cylinder(self) -> None:
         _, _, obstacle_map = self._synthetic_maps()
