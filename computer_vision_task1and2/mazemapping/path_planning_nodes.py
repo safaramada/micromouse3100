@@ -30,18 +30,18 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import List, NamedTuple, Tuple
+from typing import List, NamedTuple, Sequence, Tuple
 
 import cv2
 import numpy as np
 
 try:
+    from clip_grid import infer_clip_grid
     from mask_maze import create_board_mask, create_maze_masks
 except ImportError as error:
     raise ImportError(
-        "Could not import mask_maze.py. Put mask_maze.py in the same folder "
-        "as this file, and make sure it contains create_maze_masks() and "
-        "create_board_mask()."
+        "Could not import clip_grid.py or mask_maze.py. Put both files in "
+        "the same folder as this file."
     ) from error
 
 
@@ -221,11 +221,17 @@ def generate_fixed_grid_nodes(
 
             inside_image = 0 <= x < width and 0 <= y < height
             inside_board = inside_image and board_mask[y, x] == 255
+            is_cut_off_corner = (
+                row in (0, rows - 1)
+                and column in (0, columns - 1)
+            )
 
             # A node is blocked when it is outside the playable board or when
-            # its coordinate lies on a black obstacle pixel.
+            # its coordinate lies on a black obstacle pixel. The four logical
+            # corners are also unusable on the octagonal maze board.
             blocked = (
-                not inside_board
+                is_cut_off_corner
+                or not inside_board
                 or planning_map[y, x] != 255
             )
 
@@ -241,6 +247,59 @@ def generate_fixed_grid_nodes(
             )
 
             node_id += 1
+
+    return nodes
+
+
+def generate_nodes_from_positions(
+    planning_map: np.ndarray,
+    board_mask: np.ndarray,
+    rows: int,
+    columns: int,
+    positions: Sequence[Point],
+) -> List[GridNode]:
+    """Classify row-major nodes at externally calculated image positions."""
+    if rows < 2 or columns < 2:
+        raise ValueError("The grid needs at least two rows and columns.")
+
+    expected_position_count = rows * columns
+    if len(positions) != expected_position_count:
+        raise ValueError(
+            "Expected {} node positions for a {} x {} grid, but received {}."
+            .format(expected_position_count, rows, columns, len(positions))
+        )
+
+    height, width = planning_map.shape
+    nodes: List[GridNode] = []
+
+    for node_id, position in enumerate(positions):
+        x = int(round(float(position[0])))
+        y = int(round(float(position[1])))
+        row = node_id // columns
+        column = node_id % columns
+
+        inside_image = 0 <= x < width and 0 <= y < height
+        inside_board = inside_image and board_mask[y, x] == 255
+        is_cut_off_corner = (
+            row in (0, rows - 1)
+            and column in (0, columns - 1)
+        )
+        blocked = (
+            is_cut_off_corner
+            or not inside_board
+            or planning_map[y, x] != 255
+        )
+
+        nodes.append(
+            GridNode(
+                node_id=node_id,
+                row=row,
+                column=column,
+                x=x,
+                y=y,
+                blocked=blocked,
+            )
+        )
 
     return nodes
 
@@ -425,6 +484,15 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--grid-from-clips",
+        action="store_true",
+        help=(
+            "Detect cyan wall clips and fit a perspective-aware node grid. "
+            "When omitted, the original fixed inset grid is used."
+        ),
+    )
+
+    parser.add_argument(
         "--clearance",
         type=int,
         default=CLEARANCE_PIXELS,
@@ -510,14 +578,37 @@ def main() -> None:
     board_mask, _ = create_board_mask(height, width)
 
     # Generate ALL lattice nodes first, including nodes on walls.
-    nodes = generate_fixed_grid_nodes(
-        planning_map=classified_map,
-        board_mask=board_mask,
-        rows=args.rows,
-        columns=args.columns,
-        inset_x_fraction=args.inset_x,
-        inset_y_fraction=args.inset_y,
-    )
+    if args.grid_from_clips:
+        clip_grid = infer_clip_grid(
+            image=original_image,
+            rows=args.rows,
+            columns=args.columns,
+        )
+        nodes = generate_nodes_from_positions(
+            planning_map=classified_map,
+            board_mask=board_mask,
+            rows=args.rows,
+            columns=args.columns,
+            positions=clip_grid.node_positions,
+        )
+        print(
+            "Clip-derived grid: {} detections, {} fit inliers, "
+            "median error {:.2f} pixels."
+            .format(
+                len(clip_grid.clip_centres),
+                clip_grid.inlier_count,
+                clip_grid.median_fit_error,
+            )
+        )
+    else:
+        nodes = generate_fixed_grid_nodes(
+            planning_map=classified_map,
+            board_mask=board_mask,
+            rows=args.rows,
+            columns=args.columns,
+            inset_x_fraction=args.inset_x,
+            inset_y_fraction=args.inset_y,
+        )
 
     free_nodes = [
         node for node in nodes
