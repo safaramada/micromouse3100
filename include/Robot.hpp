@@ -50,9 +50,9 @@ public:
           imu(imu),
           wheel_radius_mm(wheel_radius_mm),
           wheel_base_mm(wheel_base_mm),
-          heading_pid(2.3, 0.02, 0.06),
+          heading_pid(2.0, 0.0, 0.06),
           distance_pid(1.2, 0.02, 0.04),
-          turn_pid(1.6, 0.0, 0.10) {}
+          turn_pid(2.0, 0.0, 0.02) {}
 
     void begin() {
         left_encoder.begin();
@@ -138,7 +138,9 @@ public:
         task = TASK_TURN;
         finished = false;
         turn_hold_enabled = false;
-        target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
+        // getYawDeg() is already relative to yaw_zero_deg, so angle_deg is an
+        // absolute target in that same zeroed reference frame.
+        target_yaw_deg = IMU::wrapAngleDeg(angle_deg);
         beginTurnController();
     }
 
@@ -155,7 +157,9 @@ public:
         // Keep one absolute heading reference for the whole command string.
         // Building each turn from the measured yaw would carry the residual
         // error from one movement into every movement that follows.
-        target_yaw_deg = imu.getYawDeg();
+        // Command headings are exact increments from yaw_zero_deg rather than
+        // increments from a potentially imperfect measured heading.
+        target_yaw_deg = 0.0f;
 
         stopMotors();
         resetSideLidarAvoidanceState();
@@ -178,8 +182,8 @@ public:
         finished = false;
         turn_hold_enabled = true;
 
-        // Save this once. Do not recalculate it after the robot is disturbed.
-        target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
+        // Hold an absolute heading relative to yaw_zero_deg.
+        target_yaw_deg = IMU::wrapAngleDeg(angle_deg);
 
         beginTurnController();
 
@@ -858,7 +862,7 @@ private:
     const unsigned long turn_settle_time_ms = 100;
     const float max_turn_pwm = 90.0;
     const float min_turn_pwm = 55.0;
-    const float min_turn_near_target_pwm = 45.0;
+    const float min_turn_near_target_pwm = 20.0;
     const float turn_slow_angle_deg = 15.0;
     const float forward_heading_tolerance_deg = 0.7;
     const float max_imu_heading_correction = 20.0;
