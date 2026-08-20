@@ -1,7 +1,7 @@
 """
 path_to_lfr.py
 
-Calculates the same Dijkstra shortest path as shortest_path_dijkstra.py,
+Calculates the same wall-guided Dijkstra path as shortest_path_dijkstra.py,
 then converts that node path into relative micromouse commands:
 
     l = turn left 90 degrees
@@ -43,6 +43,8 @@ try:
         generate_nodes_from_positions,
     )
     from shortest_path_dijkstra import (
+        MAX_CONSECUTIVE_OPEN_MOVES,
+        TURN_PENALTY_EDGE_FRACTION,
         build_collision_free_graph,
         dijkstra_shortest_path,
         nearest_traversable_node,
@@ -314,6 +316,35 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--max-open-moves",
+        type=int,
+        default=MAX_CONSECUTIVE_OPEN_MOVES,
+        help=(
+            "Maximum consecutive moves with no detected side wall. "
+            "Default: {}.".format(MAX_CONSECUTIVE_OPEN_MOVES)
+        ),
+    )
+
+    parser.add_argument(
+        "--strict-wall-rule",
+        action="store_true",
+        help=(
+            "Return no path instead of using a wall-biased fallback when "
+            "the consecutive-open-move rule cannot be satisfied."
+        ),
+    )
+
+    parser.add_argument(
+        "--turn-penalty",
+        type=float,
+        default=TURN_PENALTY_EDGE_FRACTION,
+        help=(
+            "Cost of each 90-degree turn as a fraction of one move. "
+            "Default: {:.2f}.".format(TURN_PENALTY_EDGE_FRACTION)
+        ),
+    )
+
+    parser.add_argument(
         "--save",
         action="store_true",
         help="Save the generated commands to a text file.",
@@ -340,6 +371,12 @@ def main() -> None:
 
     if args.edge_thickness <= 0:
         raise ValueError("--edge-thickness must be greater than zero.")
+
+    if args.max_open_moves < 0:
+        raise ValueError("--max-open-moves must be zero or greater.")
+
+    if args.turn_penalty < 0.0:
+        raise ValueError("--turn-penalty must be zero or greater.")
 
     image_path = args.image.expanduser().resolve()
 
@@ -436,6 +473,10 @@ def main() -> None:
         graph,
         start_node.node_id,
         goal_node.node_id,
+        max_consecutive_open_moves=args.max_open_moves,
+        fallback_to_wall_biased=not args.strict_wall_rule,
+        initial_heading=args.heading,
+        turn_penalty_edge_fraction=args.turn_penalty,
     )
 
     if not path:
@@ -457,6 +498,14 @@ def main() -> None:
     compressed_commands = compress_forward_commands(commands)
 
     print("Initial heading: {}".format(args.heading))
+    print(
+        "Wall guidance: maximum {} consecutive open moves"
+        .format(args.max_open_moves)
+    )
+    print(
+        "Turn penalty: {:.2f} moves per 90 degrees"
+        .format(args.turn_penalty)
+    )
     print(
         "Path node IDs:\n{}".format(
             " -> ".join(str(node_id) for node_id in path)
