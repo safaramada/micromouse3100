@@ -77,6 +77,7 @@ public:
                uint8_t goalRow,
                uint8_t goalCol) {
         robot.stop();
+        robot.enablePersistentHeadingCorrection(true);
         robot.enableEmergencyProtection(
             true,
             emergencyFrontDistanceMm,
@@ -119,6 +120,10 @@ public:
         if (state == FINISHED || state == ERROR_STATE) {
             return;
         }
+
+        // Keep the gyro integration current during stationary sensing and
+        // settle delays as well as while the motors are active.
+        robot.update();
 
         const unsigned long now = millis();
         if (!timeReached(now, stateReadyAtMs)) {
@@ -263,8 +268,10 @@ private:
 
     static constexpr uint8_t samplesPerWall = 3;
     static constexpr uint8_t maxSensingPasses = 7;
+    // Keep retrying invalid LiDAR samples instead of terminating with E4.
+    static constexpr bool terminateOnSensorFailure = false;
     static constexpr uint16_t wallThresholdMm = 130;
-    static constexpr uint16_t emergencyFrontDistanceMm = 45;
+    static constexpr uint16_t emergencyFrontDistanceMm = 55;
     static constexpr uint16_t emergencySideDistanceMm = 25;
     static constexpr int16_t forwardPwm = 120;
     static constexpr float minimumFrontArrivalDistanceMm = 135.0f;
@@ -336,6 +343,7 @@ private:
     uint8_t forwardSensingPasses = 0;
     bool displayDirty = true;
     bool clearSourceRouteAfterMove = false;
+    bool movementHeadingSettleStarted = false;
 
     // Robot::startCommandString stores this pointer until the command ends,
     // so the one-cell command must have object lifetime rather than stack
@@ -730,7 +738,9 @@ private:
         }
 
         sampleWall(currentDirection, frontLidar);
+        robot.update();
         sampleWall(rotateLeft(currentDirection), leftLidar);
+        robot.update();
         sampleWall(rotateRight(currentDirection), rightLidar);
         sensingPasses++;
 
@@ -740,7 +750,8 @@ private:
             return;
         }
 
-        if (sensingPasses >= maxSensingPasses) {
+        if (terminateOnSensorFailure &&
+            sensingPasses >= maxSensingPasses) {
             finish(SENSOR_FAILURE);
             return;
         }
@@ -1041,7 +1052,8 @@ private:
             return;
         }
 
-        if (forwardSensingPasses >= maxSensingPasses) {
+        if (terminateOnSensorFailure &&
+            forwardSensingPasses >= maxSensingPasses) {
             finish(SENSOR_FAILURE);
             return;
         }
@@ -1053,6 +1065,7 @@ private:
         // Movement, IMU, LiDAR avoidance, and PID behavior remain wholly in
         // the finalized Task 1 Robot controller.  The "f" command invokes its
         // tested 180 mm approach slowdown and post-LiDAR encoder checks.
+        movementHeadingSettleStarted = false;
         startOneCell(robot, forwardCommand, forwardPwm, 0);
         enterState(MOVING, 0);
     }
@@ -1077,7 +1090,6 @@ private:
     }
 
     void updateTurn() {
-        robot.update();
         if (robot.isFinished()) {
             currentDirection = targetDirection;
             displayDirty = true;
@@ -1088,7 +1100,16 @@ private:
     }
 
     void updateMovement() {
-        robot.update();
+        if (robot.isPostMoveHeadingCorrectionActive()) {
+            if (!movementHeadingSettleStarted) {
+                movementHeadingSettleStarted = true;
+                stateStartedAtMs = millis();
+            } else if (millis() - stateStartedAtMs > turnTimeoutMs) {
+                finish(TURN_TIMEOUT);
+            }
+            return;
+        }
+
         if (!robot.isFinished()) {
             if (millis() - stateStartedAtMs > movementTimeoutMs) {
                 finish(DRIVE_TIMEOUT);

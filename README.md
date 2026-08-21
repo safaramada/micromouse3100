@@ -84,7 +84,11 @@ startup readiness.
 
 The main physical tuning constants are near the top of
 `include/AutonomousMapping.hpp`: `wallThresholdMm`, `forwardPwm`, and the
-180 mm cell movement passed to `startStraightLine()`.
+180 mm cell movement passed to `startStraightLine()`. `MOTION_SPEED_SCALE` in
+`src/main.cpp` applies one ratio to all final straight-line and turning PWM
+commands without changing the requested distances or angles. `1.0f` keeps the
+original output, while the configured `0.85f` requests 85% output. The
+controller retains its minimum moving PWM to prevent low-speed motor stalling.
 
 ## Hardware Checks Still Required
 

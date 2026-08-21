@@ -12,6 +12,10 @@
 
 using namespace mtrn3100;
 
+// One ratio for all straight-line and turning motor output.
+// 1.0f is the original output; 0.85f is a conservative slowdown.
+constexpr float MOTION_SPEED_SCALE = 0.85f;
+
 U8X8_SSD1306_128X64_NONAME_HW_I2C oled(U8X8_PIN_NONE);
 bool oledReady = false;
 
@@ -91,6 +95,7 @@ void setup() {
         oled.drawString(0, 1, "Initialising...");
     }
 
+    robot.setMotionSpeedScale(MOTION_SPEED_SCALE);
     robot.begin();
 
     if (oledReady) {
@@ -101,17 +106,18 @@ void setup() {
 
     delay(1000);
 
-    // Side LiDARs only steer away when a wall is closer than 50 mm.
+    // Side LiDAR collision avoidance engages inside 40 mm; when both corridor
+    // walls are visible, the gentler centre-line correction also remains active.
     robot.enableSideLidarAvoidance(true, 50.0);
 
     // Task 4.3: explore the full maze, return to the start through DFS
     // backtracking, then run the calculated shortest route to the goal.
     autonomousMapping.begin(
-        2,                              // start row
-        7,                              // start column (first usable top cell)
-        AutonomousMapping::WEST,       // start direction
-        0,                              // goal row
-        2                               // goal column
+        1,                              // start row
+        3,                              // start column (first usable top cell)
+        AutonomousMapping::SOUTH,       // start direction
+        1,                              // goal row
+        4                               // goal column
     );
 
     if (oledReady) {

@@ -34,11 +34,15 @@ public:
         dt = static_cast<float>(curr_time - prev_time) / 1e6;
         prev_time = curr_time;
 
-        if (dt <= 0) {
-            dt = 0.001;
-        }
-
         gyro_z_dps = readGyroZ();
+
+        // One sample cannot represent an arbitrarily long sensing/startup
+        // pause. Skip large gaps rather than multiplying the latest rate by
+        // stale elapsed time and creating a false yaw jump.
+        if (dt <= 0 || dt > max_integration_dt_seconds) {
+            dt = 0;
+            return;
+        }
 
         yaw_deg += (gyro_z_dps - gyro_z_offset_dps) * dt;
         yaw_deg = wrapAngleDeg(yaw_deg);
@@ -69,6 +73,8 @@ public:
     }
 
 private:
+    static constexpr float max_integration_dt_seconds = 0.25f;
+
     // MPU6050 sensitivity at the configured +/-1000 deg/s range.
     static constexpr float gyroSensitivityLSBPerDPS() {
         return 32.8f;

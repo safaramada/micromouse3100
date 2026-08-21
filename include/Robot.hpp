@@ -95,6 +95,7 @@ public:
                            int16_t pwm = 130,
                            uint16_t front_stop_distance_mm = 0) {
         task = TASK_STRAIGHT_LINE;
+        post_move_heading_correction_active = false;
         finished = false;
         front_wall_stopped = false;
         emergency_stop_reason = EMERGENCY_NONE;
@@ -106,7 +107,9 @@ public:
         start_left_rotation = left_encoder.getRotation();
         start_right_rotation = right_encoder.getRotation();
 
-        target_yaw_deg = imu.getYawDeg();
+        if (!persistent_heading_correction_enabled) {
+            target_yaw_deg = imu.getYawDeg();
+        }
         heading_pid.reset();
         resetSideLidarAvoidanceState();
 
@@ -114,11 +117,32 @@ public:
 
     void startTurn(float angle_deg) {
         task = TASK_TURN;
+        post_move_heading_correction_active = false;
         finished = false;
         front_wall_stopped = false;
         emergency_stop_reason = EMERGENCY_NONE;
-        target_yaw_deg = IMU::wrapAngleDeg(imu.getYawDeg() + angle_deg);
+        const float turn_origin_deg = persistent_heading_correction_enabled
+            ? target_yaw_deg
+            : imu.getYawDeg();
+        target_yaw_deg = IMU::wrapAngleDeg(turn_origin_deg + angle_deg);
         beginTurnController();
+    }
+
+    // Anchor grid motion to the current pose. While enabled, 90-degree turns
+    // advance this intended heading instead of accumulating measured error,
+    // and each completed straight move settles back onto that heading.
+    void enablePersistentHeadingCorrection(bool enabled) {
+        persistent_heading_correction_enabled = enabled;
+        if (enabled) {
+            imu.update();
+            target_yaw_deg = imu.getYawDeg();
+        }
+    }
+
+    // Scale every drive command in one place. Calibrated minimum moving PWM is
+    // retained below so a slowdown does not make either controller stall.
+    void setMotionSpeedScale(float scale) {
+        motion_speed_scale = constrain(scale, 0.0f, 1.0f);
     }
 
     void enableSideLidarAvoidance(bool enabled,
@@ -159,6 +183,10 @@ public:
         return finished;
     }
 
+    bool isPostMoveHeadingCorrectionActive() const {
+        return post_move_heading_correction_active;
+    }
+
     bool stoppedForFrontWall() const {
         return front_wall_stopped;
     }
@@ -186,6 +214,7 @@ public:
     void stop() {
         stopMotors();
         task = TASK_IDLE;
+        post_move_heading_correction_active = false;
         finished = true;
         front_wall_stopped = false;
         emergency_stop_reason = EMERGENCY_NONE;
@@ -231,7 +260,7 @@ private:
         float distance_mm = getAverageDistanceMM();
 
         if (distance_mm >= target_distance_mm) {
-            finishTask();
+            completeStraightDistance();
             return;
         }
 
@@ -243,7 +272,12 @@ private:
         if ((emergency_protection_enabled || front_stop_distance_mm > 0) &&
             active_front_stop_mm > 0) {
             bool front_wall = false;
-            if (senseFrontWall(active_front_stop_mm, front_wall) &&
+            const bool front_reading_available =
+                senseFrontWall(active_front_stop_mm, front_wall);
+            // Do not let a blocking range read create a long gyro gap while
+            // the chassis is moving.
+            imu.update();
+            if (front_reading_available &&
                 front_wall) {
                 front_wall_stopped = true;
                 emergency_stop_reason = EMERGENCY_FRONT;
@@ -255,17 +289,11 @@ private:
             // encoder target, so check the distance again before driving.
             distance_mm = getAverageDistanceMM();
             if (distance_mm >= target_distance_mm) {
-                finishTask();
+                completeStraightDistance();
                 return;
             }
         }
 
-        float current_yaw = imu.getYawDeg();
-
-        // Positive if robot has rotated away from starting heading
-        float heading_error = IMU::wrapAngleDeg(current_yaw - target_yaw_deg);
-
-        float imu_correction = heading_pid.computeFromError(heading_error);
         float lidar_correction = getSideLidarAvoidanceCorrection();
 
         if (emergency_stop_reason != EMERGENCY_NONE) {
@@ -273,11 +301,20 @@ private:
             return;
         }
 
+        // The side reads above can block. Use the yaw sampled after those
+        // reads so the heading command is not based on stale IMU data.
+        const float current_yaw = imu.getYawDeg();
+        const float heading_error = IMU::wrapAngleDeg(
+            current_yaw - target_yaw_deg
+        );
+        const float imu_correction =
+            heading_pid.computeFromError(heading_error);
+
         // The two side readings also take time. Never send another forward
         // command if the cell target was crossed while waiting for them.
         distance_mm = getAverageDistanceMM();
         if (distance_mm >= target_distance_mm) {
-            finishTask();
+            completeStraightDistance();
             return;
         }
 
@@ -297,6 +334,88 @@ private:
 
         setDrivePWM(left_pwm, right_pwm);
 
+    }
+
+    void completeStraightDistance() {
+        if (!persistent_heading_correction_enabled) {
+            finishTask();
+            return;
+        }
+
+        stopMotors();
+
+        const bool endpoint_turn_clearance =
+            hasEndpointHeadingCorrectionClearance();
+
+        const float current_yaw_deg = imu.getYawDeg();
+        const float yaw_error =
+            IMU::wrapAngleDeg(target_yaw_deg - current_yaw_deg);
+        if (fabs(yaw_error) > max_post_move_heading_correction_deg) {
+            // A large discrepancy suggests pickup, impact, or a bad IMU
+            // estimate. Re-anchor so the skipped error cannot reappear as an
+            // oversized correction in the next straight or planned turn.
+            target_yaw_deg = current_yaw_deg;
+            finishTask();
+            return;
+        }
+
+        if (fabs(yaw_error) <= turn_tolerance_deg ||
+            !endpoint_turn_clearance) {
+            finishTask();
+            return;
+        }
+
+        // Translation is complete. Reuse the in-place turn controller to
+        // remove residual yaw before reporting the cell movement as finished.
+        task = TASK_TURN;
+        post_move_heading_correction_active = true;
+        finished = false;
+        beginTurnController();
+    }
+
+    bool hasEndpointHeadingCorrectionClearance() {
+        const uint16_t front_distance_mm = front_lidar.readDistance();
+        imu.update();
+        const uint16_t left_distance_mm = left_lidar.readDistance();
+        imu.update();
+        const uint16_t right_distance_mm = right_lidar.readDistance();
+        imu.update();
+
+        const uint16_t front_turn_clearance_mm =
+            emergency_front_distance_mm + endpoint_turn_clearance_margin_mm;
+        const uint16_t side_turn_clearance_mm =
+            emergency_side_distance_mm + endpoint_turn_clearance_margin_mm;
+
+        return lidarAllowsEndpointTurn(
+                   front_lidar,
+                   front_distance_mm,
+                   front_turn_clearance_mm
+               ) &&
+               lidarAllowsEndpointTurn(
+                   left_lidar,
+                   left_distance_mm,
+                   side_turn_clearance_mm
+               ) &&
+               lidarAllowsEndpointTurn(
+                   right_lidar,
+                   right_distance_mm,
+                   side_turn_clearance_mm
+               );
+    }
+
+    bool lidarAllowsEndpointTurn(Lidar& lidar,
+                                 uint16_t distance_mm,
+                                 uint16_t minimum_clearance_mm) const {
+        switch (lidar.getReadingResult()) {
+            case Lidar::READING_VALID:
+                return distance_mm > minimum_clearance_mm;
+            case Lidar::READING_NO_TARGET:
+                return true;
+            case Lidar::READING_TOO_CLOSE:
+            case Lidar::READING_INVALID:
+            default:
+                return false;
+        }
     }
 
     void updateTurn() {
@@ -342,7 +461,9 @@ private:
         }
 
         uint16_t left_reading_mm = left_lidar.readDistance();
+        imu.update();
         uint16_t right_reading_mm = right_lidar.readDistance();
+        imu.update();
 
         if (emergency_protection_enabled) {
             const bool left_emergency_close = isEmergencyClose(
@@ -446,8 +567,39 @@ private:
             avoidance_error_mm += side_avoidance_deadband_mm;
         }
 
-        float target_correction = constrain(
+        const float avoidance_correction = constrain(
             side_avoidance_kp * avoidance_error_mm,
+            -max_side_avoidance_correction,
+            max_side_avoidance_correction
+        );
+
+        // With stable walls on both sides, their distance difference reveals
+        // lateral offset. Apply a gentle centre-line correction during the
+        // existing forward move; no extra translation is introduced.
+        float centering_error_mm = 0;
+        if (left_fresh_sample && right_fresh_sample &&
+            left_side_state.sample_count >= 3U &&
+            right_side_state.sample_count >= 3U) {
+            centering_error_mm =
+                right_distance_mm - left_distance_mm - side_centering_bias_mm;
+
+            if (fabs(centering_error_mm) <= side_centering_deadband_mm) {
+                centering_error_mm = 0;
+            } else if (centering_error_mm > 0) {
+                centering_error_mm -= side_centering_deadband_mm;
+            } else {
+                centering_error_mm += side_centering_deadband_mm;
+            }
+        }
+
+        const float centering_correction = constrain(
+            side_centering_kp * centering_error_mm,
+            -max_side_centering_correction,
+            max_side_centering_correction
+        );
+
+        const float target_correction = constrain(
+            avoidance_correction + centering_correction,
             -max_side_avoidance_correction,
             max_side_avoidance_correction
         );
@@ -700,10 +852,17 @@ private:
     }
 
     void setDrivePWM(float left_pwm, float right_pwm) {
-        left_motor.setPWM(static_cast<int16_t>(constrain(-left_pwm, -255, 255)));
+        const float scaled_left_pwm = applyMotionSpeedScale(left_pwm);
+        const float scaled_right_pwm = applyMotionSpeedScale(right_pwm);
+
+        left_motor.setPWM(static_cast<int16_t>(
+            constrain(-scaled_left_pwm, -255.0f, 255.0f)
+        ));
 
         // Right motor is inverted because negative PWM was forward for your robot
-        right_motor.setPWM(static_cast<int16_t>(constrain(right_pwm, -255, 255)));
+        right_motor.setPWM(static_cast<int16_t>(
+            constrain(scaled_right_pwm, -255.0f, 255.0f)
+        ));
     }
 
     void stopMotors() {
@@ -714,7 +873,33 @@ private:
     void finishTask() {
         stopMotors();
         task = TASK_IDLE;
+        post_move_heading_correction_active = false;
         finished = true;
+    }
+
+    float applyMotionSpeedScale(float pwm) const {
+        const float scaled_pwm = pwm * motion_speed_scale;
+        if (scaled_pwm == 0) {
+            return 0;
+        }
+
+        float minimum_moving_pwm = 0;
+        if (task == TASK_TURN) {
+            minimum_moving_pwm = min_turn_near_target_pwm;
+        } else if (task == TASK_STRAIGHT_LINE) {
+            minimum_moving_pwm = min_forward_wheel_pwm;
+        }
+
+        // Preserve the calibrated anti-stiction floor, especially for the
+        // small in-place correction performed at a cell endpoint.
+        if (minimum_moving_pwm > 0 &&
+            fabs(scaled_pwm) < minimum_moving_pwm) {
+            return scaled_pwm > 0
+                ? minimum_moving_pwm
+                : -minimum_moving_pwm;
+        }
+
+        return scaled_pwm;
     }
 
 private:
@@ -737,7 +922,10 @@ private:
     bool front_wall_stopped = false;
     EmergencyStopReason emergency_stop_reason = EMERGENCY_NONE;
     bool emergency_protection_enabled = false;
+    bool persistent_heading_correction_enabled = false;
+    bool post_move_heading_correction_active = false;
 
+    float motion_speed_scale = 1.0f;
     int16_t base_pwm = 120;
     uint16_t front_stop_distance_mm = 0;
     uint16_t emergency_front_distance_mm = 45;
@@ -753,7 +941,10 @@ private:
     const float min_turn_pwm = 52.0;
     const float min_turn_near_target_pwm = 42.0;
     const float turn_slow_angle_deg = 15.0;
+    const float max_post_move_heading_correction_deg = 8.0;
+    const uint16_t endpoint_turn_clearance_margin_mm = 5;
     const float max_forward_correction = 32.0;
+    const float min_forward_wheel_pwm = 80.0;
     const float forward_slowdown_distance_mm = 90.0;
     const float min_forward_approach_pwm = 95.0;
 
@@ -761,6 +952,12 @@ private:
     float side_clearance_mm = 50.0;
     const float side_avoidance_kp = 0.62;
     const float max_side_avoidance_correction = 16.0;
+    const float side_centering_kp = 0.20;
+    const float max_side_centering_correction = 6.0;
+    const float side_centering_deadband_mm = 5.0;
+    // Increase this if the right sensor reads farther than the left when the
+    // chassis is physically centred; use a negative value for the opposite.
+    const float side_centering_bias_mm = 0.0;
     const float max_side_avoidance_step = 5.0;
     const float side_avoidance_deadband_mm = 3.0;
     const float side_avoidance_hysteresis_mm = 5.0;
