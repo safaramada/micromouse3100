@@ -52,7 +52,7 @@ StraightLineTracking straightLineTask(robot);
 Turning turningTask(robot);
 
 // const char command_string[] = "ffffrfflffrfrflflfrffrffflfrffffrflfrffff";
-const char command_string[] = "flfrffffrflfrflfrfrflffrflflfrfrffflfrfrflff";
+const char command_string[] = "rrflflfrflffrflffflflfrflfffrfffrflfrfffrfrflfflflfrfrfflflffflfrfflfrflfffflfrflfrflfflf";
 
 bool i2cDevicePresent(uint8_t address) {
     Wire.beginTransmission(address);
@@ -129,10 +129,10 @@ void setup() {
     delay(1000);
 
     // Side LiDARs only steer away when a wall is closer than 50 mm.
-    robot.enableSideLidarAvoidance(true, 50.0);
+    robot.enableSideLidarAvoidance(true, 45);
 
     // Start the next turn if the front wall is closer than 50 mm.
-    robot.enableFrontLidarSafety(true, 50);
+    robot.enableFrontLidarSafety(true, 45);
 
     robot.startCommandString(command_string, 130);
     // robot.startTurnHold(-90.0);
